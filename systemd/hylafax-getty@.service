@@ -1,0 +1,14 @@
+[Unit]
+Description=HylaFAX faxgetty on modem %I
+BindsTo=hylafax.service
+After=hylafax.service
+
+[Service]
+Type=forking
+User=faxq
+Group=fax
+ExecStart=/opt/hylafax/bin/faxgetty --notify q --timing 0x3fff %I
+Restart=on-abort
+
+[Install]
+WantedBy=hylafax.service

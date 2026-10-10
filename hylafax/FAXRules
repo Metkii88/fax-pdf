@@ -1,0 +1,15 @@
+# /var/spool/hylafax/etc/FAXRules — правила маршрутизации принятых факсов.
+# Синтаксис HylaFAX: Rule "<regex по CSID/TSI>" Action ...
+# Монитор recv-monitor.py читает соответствия из /etc/fax-pdf/routes.json,
+# а faxgetty использует эти правила для выбора каталога/получателя.
+
+# По умолчанию — кладём всё в recvq (имя файла содержит TSI.CSID)
+Rule  ".*"   Group "default"
+
+# Примеры: документооборот по подразделениям (CSID отправителя)
+Rule  "^.*(BUX|BUH).*"      Group "buhgalteria"
+Rule  "^.*(SALES|OPT).*"    Group "sales"
+Rule  "^.*(DIR|GENDIR).*"   Group "director"
+
+# Запрет приёма с неизвестных номеров без TSI
+Rule  "^$"                  Reject  "No TSI provided"

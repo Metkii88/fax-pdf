@@ -1,0 +1,22 @@
+[Unit]
+Description=HylaFAX fax server (faxq scheduler)
+Documentation=https://github.com/ifax/HylaFAX
+After=network.target
+Wants=hylafax-getty@ttyS0.target
+
+[Service]
+Type=forking
+User=faxq
+Group=fax
+Environment=HYLASPOOL=/var/spool/hylafax
+ExecStart=/opt/hylafax/sbin/faxq -q -c /var/spool/hylafax/etc/config
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+# жёсткость для Astra SE
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/var/spool/hylafax /var/log/fax-pdf
+
+[Install]
+WantedBy=multi-user.target

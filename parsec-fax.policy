@@ -1,0 +1,53 @@
+# ============================================================================
+# Политика PARSEC для Fax-PDF (Astra Linux SE 1.7)
+# Формат — как в /etc/security/parsec/policy.conf (БЭД + МЧВ).
+# Перед загрузкой сделайте резервную копию существующей политики!
+#   parsecd -p /etc/security/parsec/policy.conf -l
+# ============================================================================
+
+# ---- Объекты (каталоги факсового комплекса) --------------------------------
+obj /var/spool/hylafax                mlsmark=0x0002:0004;      # recvq/sendq: ДСП
+obj /var/spool/hylafax/recvq          mlsmark=0x0002:0004;
+obj /var/spool/hylafax/sendq          mlsmark=0x0002:0004;
+obj /var/spool/hylafax/archive        mlsmark=0002:0006;        # архив: секретно-для-служ
+obj /srv/fax/incoming                 mlsmark=0x0002:0004;
+obj /srv/fax/outbox                   mlsmark=0x0002:0004;
+obj /var/log/fax-pdf                  mlsmark=0x0000:0000;
+
+# ---- Субъекты (процессы демонов и утилит) ----------------------------------
+subj /opt/hylafax/sbin/faxq           mlslvl=0x0002:0004; mlscomp=all;
+subj /opt/hylafax/bin/faxgetty        mlslvl=0x0002:0004; mlscomp=all;
+subj /opt/hylafax/bin/xferfaxd        mlslvl=0x0002:0004;
+subj /usr/local/bin/sendfax           mlslvl=0x0002:0004;
+subj /usr/local/bin/recvfax           mlslvl=0x0002:0004;
+subj /opt/fax-pdf/recv-monitor.py     mlslvl=0x0002:0004;
+# fax-drop — единственная утилита, которой разрешено ПОВЫШАТЬ метку при
+# раскладке принятых документов из recvq в папки пользователей
+subj /usr/local/bin/fax-drop          mlslvl=0x0002:0004; mlsdom=0x0002:0004;
+
+# ---- Правила доступа -------------------------------------------------------
+# faxq/faxgetty читают sendq и пишут recvq
+acc /opt/hylafax/sbin/faxq            /var/spool/hylafax/sendq    rdwxa;
+acc /opt/hylafax/bin/faxgetty         /var/spool/hylafax/recvq    rdwxa;
+acc /opt/hylafax/bin/faxgetty         /var/spool/hylafax/sendq    rdx;
+acc /opt/hylafax/bin/faxgetty         /var/spool/hylafax/log      wacx;
+
+# монитор: читает recvq, пишет в incoming и архив
+acc /opt/fax-pdf/recv-monitor.py      /var/spool/hylafax/recvq    rdx;
+acc /opt/fax-pdf/recv-monitor.py      /srv/fax/incoming           rwxc;
+acc /opt/fax-pdf/recv-monitor.py      /var/spool/hylafax/archive  rwa;
+
+# оператор может писать только в свой outbox (метка пользователя <= 0x0002:0004)
+defsubj operator                      mlslvl=0x0002:0004;
+acc operator                          /srv/fax/outbox             rwxc;
+
+# сетевой доступ xferfaxd (TCP 4559/4560) — только из подсети АРМ оператора
+net /opt/hylafax/bin/xferfaxd         addr=192.168.100.0/24 ports=4559,4560 in;
+
+# ---------------------------------------------------------------------------
+# Примечание по формату: точный синтаксис зависит от версии БЭД в вашем
+# релизе Astra 1.7 (пакет parsec / security-bad). Сверяйтесь с
+#   man parsec-mkold / /usr/share/doc/parsec/examples/policy.conf
+# Перед применением обязательна проверка на эталонной машине и резервная
+# копия действующей политики (/etc/security/parsec/policy.conf.bak).
+# ---------------------------------------------------------------------------

@@ -1,0 +1,11 @@
+#!/bin/sh
+# fax-drop — единственная утилита с правом понижения метки МЧВ при раскладке
+# принятых документов из recvq в папки пользователей (см. parsec-fax.policy).
+# Использование: fax-drop <исходный.pdf> <пользователь>
+SRC="$1"; USER="$2"
+[ -f "$SRC" ] || { echo "нет файла $SRC" >&2; exit 1; }
+DEST="/srv/fax/incoming/$USER/$(date +%Y/%m)"
+mkdir -p "$DEST"
+parsec-mark -t mls -l 0x0002:0004 "$SRC" 2>/dev/null || true
+cp -a "$SRC" "$DEST/"
+sha256sum "$DEST/$(basename "$SRC")" > "$DEST/$(basename "$SRC").sha256"

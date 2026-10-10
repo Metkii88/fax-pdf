@@ -1,0 +1,21 @@
+[Unit]
+Description=Fax-PDF receiver monitor (TIFF->PDF routing for Astra SE)
+After=hylafax.service
+Requires=hylafax.service
+
+[Service]
+Type=simple
+User=faxmon
+Group=fax
+Environment=HYLASPOOL=/var/spool/hylafax
+Environment=FAX_INCOMING=/srv/fax/incoming
+Environment=FAX_LOGDIR=/var/log/fax-pdf
+ExecStart=/usr/bin/python3 /opt/fax-pdf/recv-monitor.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/var/spool/hylafax /srv/fax /var/log/fax-pdf
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,18 @@
+#!/bin/sh
+# /var/spool/hylafax/etc/notify — скрипт уведомления HylaFAX о статусе задач.
+# Вызывается faxq с аргументами: <jobid> <sender> <status> <subject>
+JOB=$1; SENDER=$2; STATUS=$3; SUBJECT=$4
+LOG=/var/log/fax-pdf/report.log
+mkdir -p "$(dirname "$LOG")"
+{
+  echo "===== $(date '+%F %T') job=$JOB status=$STATUS from=$SENDER"
+  echo "$SUBJECT"
+} >> "$LOG"
+# письмо отправителю, если это локальный пользователь
+case "$SENDER" in
+  *@*) ;;
+  *) command -v sendmail >/dev/null && \
+     printf 'To: %s\nSubject: Fax %s: %s\n\n%s\n' "$SENDER@localhost" "$JOB" "$STATUS" "$SUBJECT" \
+     | sendmail -t ;;
+esac
+exit 0

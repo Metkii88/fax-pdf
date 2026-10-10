@@ -1,0 +1,39 @@
+# /var/spool/hylafax/etc/config.local
+# Дополнительные глобальные параметры HylaFAX для Fax-PDF (Astra 1.7).
+# Кладется в etc/ рядом с основным config; применяется ко всем модеймам.
+
+# --- Формат отправки: только Group3/Group4 (TIFF), без цвета ----------------
+MaxPageWidth:         1728            # A4 fine (204 dpi по горизонтали)
+PageCosts:            "*:0:1"
+VRes:                 196             # 98 l/in * 2 (fine mode)
+HRes:                 2               # 200 dpi (G3/G4)
+
+# --- PDF-совместимость при приёме --------------------------------------------
+# faxgetty сохраняет принятые страницы в TIFF-F; наш recv-monitor делает PDF.
+RecvFormat:           tiff
+FileMode:             0640
+DirMode:              0750
+Owner:                faxq
+Group:                fax
+
+# --- Поведение линии ----------------------------------------------------------
+RingsConfThreshold:   2
+RingNoAnswerToData:   10
+NoAnswerToData:       true            # если не факс — сброс, не отвечать голосом
+EnableProgressReq:    true
+IncludeTSIInImage:    false
+
+# --- Ограничения и безопасность ----------------------------------------------
+MaxConcurrentCalls:   2
+ModemEmulatorCmd:     ""
+RejectPhone:          ".*"            # базово: запрещаем всё...
+AcceptPhone:          "+?[0-9]{10,15}"  # ...кроме корректных номеров РФ
+SendAutoCoverTurnOffYes: true
+
+# --- Уведомления ---------------------------------------------------------------
+NotifyFmt:            list
+LocalIdentifier:      "Fax-PDF"
+MailCommand:          /usr/sbin/sendmail -t -oi -f fax@%l
+
+# Регламент ротации логов сессий — см. также systemd/journald
+LogTime:              "%Y-%m-%d %H:%M:%S"

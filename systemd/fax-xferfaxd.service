@@ -1,0 +1,14 @@
+[Unit]
+Description=HylaFAX xferfaxd (remote send/receive daemon, ports 4559/4560)
+After=hylafax.service network.target
+
+[Service]
+Type=simple
+User=xferfaxd
+Group=fax
+ExecStart=/opt/hylafax/bin/xferfaxd -i 4559 -f 4560 -s -u +2 -n
+Restart=on-failure
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
