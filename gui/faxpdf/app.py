@@ -37,6 +37,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QTextEdit, QLineEdit, QPushButton, QLabel,
     QFileDialog, QMessageBox, QSplitter, QToolBar, QAction, QStatusBar,
     QListView, QSizePolicy, QProgressBar, QFrame, QSystemTrayIcon,
+    QGroupBox, QCheckBox, QSpinBox,
 )
 
 try:
@@ -214,14 +215,67 @@ class MainWindow(QMainWindow):
         self.machine.docSent.connect(
             lambda d: self.log_line(f"АППАРАТ: отправлен {d.path.name} → {d.number}"))
         self.machine.error.connect(lambda m: self.log_line("АППАРАТ: ошибка — " + m))
+        self.machine.voiceCall.connect(
+            lambda ev: self.log_line(
+                f"АППАРАТ: голосовой вызов от {ev.get('number') or 'неизвестен'}"
+                + (" (пропущен)" if ev.get('kind') == 'voice-missed' else "")))
+
+        # --- панель настроек: голосовые вызовы + путь сохранения по умолчанию
+        from faxpdf import settings as cfgmod
+        grp_v = QGroupBox("Голосовые вызовы")
+        gv = QVBoxLayout(grp_v)
+        self.chk_voice = QCheckBox("Отвечать на голосовые («трубка»)")
+        self.chk_voice.setChecked(bool(cfgmod.get("voice_answer")))
+        self.sp_rings = QSpinBox()
+        self.sp_rings.setRange(1, 9)
+        self.sp_rings.setValue(int(cfgmod.get("voice_rings") or 4))
+        self.sp_rings.setSuffix(" кол.")
+        def _apply_voice():
+            cfgmod.set_voice(self.chk_voice.isChecked(), self.sp_rings.value())
+            self.machine.set_voice_enabled(self.chk_voice.isChecked(),
+                                           self.sp_rings.value())
+        self.chk_voice.toggled.connect(_apply_voice)
+        self.sp_rings.valueChanged.connect(_apply_voice)
+        gv.addWidget(self.chk_voice)
+        gv.addWidget(QLabel("Кольцев до ответа:"))
+        gv.addWidget(self.sp_rings)
+        gv.addWidget(QLabel(
+            "Монитор голосовых вызовов: systemd-юнит <code>fax-pdf-voice</code> "
+            "(voice-monitor.py)."))
         side = QVBoxLayout()
         side.addWidget(QLabel("<b>Факсимильный аппарат</b>"))
         side.addWidget(QLabel(
-            "Наберите номер на клавиатуре и нажмите <b>TX▲</b> — выбор PDF и отправка.<br>"
+            "Наберите номер на клавиатуре и нажмите <b>TX▲</b> — выбор файлов "
+            "(можно несколько) и отправка пачкой.<br>"
             "Входящие факсы принимаются автоматически: экран покажет RING → RX, "
             "готовый документ появится в лотке выдачи (клик — открыть).<br>"
-            "<b>RxD</b> — папка «Входящие», <b>STOP</b> — прервать передачу, "
-            "<b>HOLD</b> — пауза приёма."))
+            "<b>RxD</b> — папка «Входящие», <b>STOP</b> — прервать передачу/звонок, "
+            "<b>HOLD</b> — пауза приёма, <b>VOICE</b> — снять/положить трубку.<br>"
+            "Принятые файлы сохраняются в папку по умолчанию (/home/user); "
+            "изменить — кнопка <b>SAVE…</b> на аппарате или поле ниже."))
+        grp_d = QGroupBox("Папка для принятых факсов")
+        gd = QHBoxLayout(grp_d)
+        self.ed_incoming = QLineEdit(str(cfgmod.get("incoming_dir")))
+        b_pick = QPushButton("Выбрать…")
+        b_open = QPushButton("Открыть")
+        def _pick_dir():
+            d = QFileDialog.getExistingDirectory(
+                self, "Куда сохранять принятые факсы", self.ed_incoming.text())
+            if d:
+                self.ed_incoming.setText(d)
+                cfgmod.set_incoming_dir(d)
+                self.log_line("Папка сохранения принятых факсов: " + d)
+        def _open_dir():
+            d = Path(self.ed_incoming.text() or str(Path.home()))
+            d.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(d)))
+        b_pick.clicked.connect(_pick_dir)
+        b_open.clicked.connect(_open_dir)
+        gd.addWidget(self.ed_incoming, 1)
+        gd.addWidget(b_pick)
+        gd.addWidget(b_open)
+        side.addWidget(grp_v)
+        side.addWidget(grp_d)
         side.addStretch(1)
         h.addWidget(self.machine, 3)
         h.addLayout(side, 1)
@@ -479,33 +533,61 @@ class MainWindow(QMainWindow):
         return w
 
     def pick_pdf(self):
-        fn, _ = QFileDialog.getOpenFileName(self, "Выберите PDF", str(Path.home()),
-                                            "Документы PDF (*.pdf)")
+        fn, _ = QFileDialog.getOpenFileNames(
+            self, "Документы для отправки (можно выбрать несколько)",
+            str(Path.home()), "Документы PDF/TIFF (*.pdf *.tif *.tiff)")
         if fn:
-            self.ed_pdf.setText(fn)
+            self.ed_pdf.setText("; ".join(fn))
 
     def do_send(self):
-        pdf, num = self.ed_pdf.text().strip(), self.ed_num.text().strip()
-        if not pdf or not Path(pdf).exists():
-            QMessageBox.warning(self, APP_TITLE, "Укажите существующий PDF.")
+        raw = self.ed_pdf.text().strip()
+        pdfs = [p.strip() for p in raw.replace(",", ";").split(";") if p.strip()]
+        pdfs = [p for p in pdfs if Path(p).exists()]
+        num = self.ed_num.text().strip()
+        if not pdfs:
+            QMessageBox.warning(self, APP_TITLE,
+                                "Укажите существующий PDF (или несколько через «;»).")
             return
         if not num:
             QMessageBox.warning(self, APP_TITLE, "Укажите номер получателя.")
             return
         self.btn_send.setEnabled(False)
-        self.statusBar().showMessage("Конвертация PDF → TIFF G4 и постановка в очередь…")
-        self._sw = SendWorker(pdf, num, self.ed_cmt.text().strip(), self)
+        self.statusBar().showMessage(
+            f"Конвертация {len(pdfs)} файл(ов) → TIFF G4 и постановка в очередь…")
+        self._send_batch = pdfs
+        self._send_idx = 0
+        self._sw = SendWorker(pdfs[0], num, self.ed_cmt.text().strip(), self)
         self._sw.done.connect(self.on_sent)
         self._sw.fail.connect(self.on_send_fail)
         self._sw.start()
 
     def on_sent(self, out):
+        # пакетная отправка: если в списке остались файлы — ставим следующий
+        batch = getattr(self, "_send_batch", [])
+        idx = getattr(self, "_send_idx", 0) + 1
+        num = self.ed_num.text().strip()
+        if batch and idx < len(batch):
+            self._send_idx = idx
+            self.statusBar().showMessage(
+                f"Очередь {idx + 1}/{len(batch)}: {Path(batch[idx]).name}")
+            self.log_line("ОТПРАВКА: " + out.replace("\n", " | "))
+            self.refresh_jobs()
+            self._sw = SendWorker(batch[idx], num,
+                                  self.ed_cmt.text().strip(), self)
+            self._sw.done.connect(self.on_sent)
+            self._sw.fail.connect(self.on_send_fail)
+            self._sw.start()
+            return
+        self._send_batch = []
+        self._send_idx = 0
         self.btn_send.setEnabled(True)
         self.statusBar().showMessage("Отправлено в очередь")
         self.log_line("ОТПРАВКА: " + out.replace("\n", " | "))
         self.refresh_jobs()
 
     def on_send_fail(self, err):
+        self._send_batch = []
+        self._send_idx = 0
         self.btn_send.setEnabled(True)
         self.statusBar().showMessage("Ошибка отправки")
         self.log_line("ОШИБКА отправки: " + err)

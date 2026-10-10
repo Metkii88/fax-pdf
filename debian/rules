@@ -35,6 +35,11 @@ override_dh_auto_install:
 	install -m 0755 hylafax/notify       $(CURDIR)/debian/fax-pdf/etc/hylafax/
 	install -d $(CURDIR)/debian/fax-pdf/etc/fax-pdf
 	install -m 0644 scripts/routes.json.example $(CURDIR)/debian/fax-pdf/etc/fax-pdf/routes.json
+	# --- Серверные скрипты в /opt/fax-pdf (путь из systemd-юнитов) ---
+	install -d $(CURDIR)/debian/fax-pdf/opt/fax-pdf
+	install -m 0755 recv-monitor.py $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
+	install -m 0755 voice-monitor.py $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
+	install -m 0755 sendfax.sh $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
 	# --- systemd-юниты ---
 	install -d $(CURDIR)/debian/fax-pdf/lib/systemd/system
 	install -m 0644 systemd/*.service $(CURDIR)/debian/fax-pdf/lib/systemd/system/

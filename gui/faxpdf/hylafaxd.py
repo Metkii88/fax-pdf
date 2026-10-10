@@ -26,6 +26,70 @@ RECVQ = SPOOL / "recvq"
 DONEQ = SPOOL / "doneq"
 ARCHIVE_RECV = SPOOL / "archive" / "recv"
 
+# ------------------------------------------------------- голосовые вызовы ---
+# HylaFAX 7.x: при звонке без CNG-сигнала факса faxgetty пишет в syslog строку
+#   "UNANSWERED VOICE CALL from <CSID>" (или "+RING" для модемов без CID).
+# Отдельный «голосовой монитор» (systemd-юнит voice-monitor) читает syslog и
+# складывает события сюда; GUI опрашивает этот файл как очередь пропущенных.
+VOICE_QUEUE = Path(os.environ.get(
+    "FAX_VOICE_QUEUE", str(Path.home() / ".fax-pdf" / "voice_calls.jsonl")))
+
+
+def read_voice_calls(limit: int = 50) -> List[dict]:
+    """Последние N голосовых/пропущенных вызовов из очереди."""
+    try:
+        lines = VOICE_QUEUE.read_text(encoding="utf-8").splitlines()[-limit:]
+    except Exception:
+        return []
+    out = []
+    for ln in reversed(lines):
+        try:
+            import json as _json
+            rec = _json.loads(ln)
+            if isinstance(rec, dict):
+                out.append(rec)
+        except Exception:
+            continue
+    return out
+
+
+def apply_voice_settings(answer: bool, rings: int,
+                        config_path: Optional[Path] = None) -> bool:
+    """Записать параметры ответа на голосовые вызовы в etc/config.tty* HylaFAX.
+
+    Ключи HylaFAX: RingsVoiceAnswer (число колец; 0 — не отвечать голосом),
+    VoiceCallModem / NonFaxSession — поведение после ответа. Возвращает True,
+    если хотя бы один конфиг обновлён (иначе — права/отсутствие spool)."""
+    import glob as _glob
+    targets = [config_path] if config_path else \
+        [Path(p) for p in _glob.glob(str(SPOOL / "etc" / "config.tty*"))]
+    if not targets:
+        targets = [SPOOL / "etc" / "config"]      # глобальный fallback
+    changed = False
+    val = str(max(1, min(9, int(rings)))) if answer else "0"
+    for t in targets:
+        if not t.is_file():
+            continue
+        try:
+            text = t.read_text(encoding="utf-8", errors="ignore")
+            new_lines = []
+            done = False
+            for line in text.splitlines():
+                if re.match(r"\s*RingsVoiceAnswer\s*:", line):
+                    new_lines.append(f"RingsVoiceAnswer:   {val}")
+                    done = True
+                else:
+                    new_lines.append(line)
+            if not done:
+                new_lines.append(f"RingsVoiceAnswer:   {val}")
+            tmp = t.with_suffix(t.suffix + ".new")
+            tmp.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            os.replace(tmp, t)
+            changed = True
+        except OSError:
+            continue  # нет прав — молча пропускаем (GUI подскажет оператору)
+    return changed
+
 
 @dataclass
 class Job:

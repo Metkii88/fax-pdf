@@ -48,10 +48,12 @@ from PyQt5.QtCore import QUrl
 
 try:  # пакетный импорт или запуск из исходников
     from faxpdf import hylafaxd as hx
+    from faxpdf import settings as cfgmod
 except ImportError:  # pragma: no cover
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import hylafaxd as hx
+    import settings as cfgmod
 
 
 # ------------------------------------------------------------------ model ---
@@ -63,6 +65,7 @@ MODE_TX = "TX"
 MODE_BUSY = "BUSY"
 MODE_ERROR = "ERROR"
 MODE_HOLD = "HOLD"
+MODE_VOICE = "VOICE"      # голосовой вызов на линии / трубка поднята
 
 
 @dataclass
@@ -123,6 +126,7 @@ class FaxMachineWidget(QWidget):
     docReceived = pyqtSignal(object)     # FaxDoc
     docSent = pyqtSignal(object)         # FaxDoc
     error = pyqtSignal(str)
+    voiceCall = pyqtSignal(object)       # dict события голосового вызова
 
     MIN_W, MIN_H = 420, 300
 
@@ -147,6 +151,14 @@ class FaxMachineWidget(QWidget):
         self._active_job: Optional[int] = None
         self._pending_pdf: Optional[Path] = None
         self.lcd_log: List[str] = []     # термо-лента событий на экране
+        self.incoming_sel: List[Path] = []   # выбранная пачка для TX (мн. файлов)
+        self._tx_queue_idx = 0
+        # --- голос
+        self.voice_enabled = cfgmod.get("voice_answer")
+        self.voice_rings = cfgmod.get("voice_rings")
+        self.offhook = False             # «трубка поднята»
+        self._ring_count = 0
+        self._seen_voice_ts = set()
 
         # анимация мигания индикатора
         self._blink = QTimer(self, interval=450, timeout=self._toggle_blink)
@@ -161,6 +173,9 @@ class FaxMachineWidget(QWidget):
         self._rx_reset = QTimer(self, singleShot=True,
                                 timeout=lambda: self._set_mode(MODE_IDLE)
                                 if self.mode == MODE_RX else None)
+        # опрос голосовых вызовов (очередь voice-monitor / syslog)
+        self._voice_poll = QTimer(self, interval=3000, timeout=self._check_voice)
+        self._voice_poll.start()
 
         # шрифты
         self.f_lcd = QFont("Monospace", 11)
@@ -214,14 +229,18 @@ class FaxMachineWidget(QWidget):
         r["<"] = QRect(x0, extra_y, kw, kh)
         r["+"] = QRect(x0 + kw + gx, extra_y, kw, kh)
         r["REDIAL"] = QRect(x0 + 2 * (kw + gx), extra_y, 2 * kw + gx, kh)
+        # нижний ряд панели: выбор папки сохранения + голосовая «трубка»
+        by = panel.bottom() - 34
+        r["SAVE"] = QRect(x0, by, 2 * kw + gx, 26)
+        r["VOICE"] = QRect(x0 + 2 * (kw + gx) + 8, by, 2 * kw + gx, 26)
         # функциональные кнопки справа от клавиатуры
         fx = panel.right() - 96
         fy = panel.top() + 12
-        fw, fh = 88, 30
+        fw, fh = 88, 26
         r["TxD"] = QRect(fx, fy, fw, fh)
-        r["RxD"] = QRect(fx, fy + fh + 10, fw, fh)
-        r["STOP"] = QRect(fx, fy + 2 * (fh + 10), fw, fh)
-        r["HOLD"] = QRect(fx, fy + 3 * (fh + 10), fw, fh)
+        r["RxD"] = QRect(fx, fy + fh + 6, fw, fh)
+        r["STOP"] = QRect(fx, fy + 2 * (fh + 6), fw, fh)
+        r["HOLD"] = QRect(fx, fy + 3 * (fh + 6), fw, fh)
         return r
 
     def _lcd_rect(self, panel: QRect) -> QRect:
@@ -286,6 +305,12 @@ class FaxMachineWidget(QWidget):
         elif k == "HOLD":
             self._toggle_hold()
             return
+        elif k == "SAVE":
+            self._choose_save_dir()
+            return
+        elif k == "VOICE":
+            self._toggle_offhook()
+            return
         else:
             if len(self.digits) < 24:
                 self.digits += k
@@ -296,6 +321,48 @@ class FaxMachineWidget(QWidget):
 
     _last_number: Optional[str] = None
 
+    def _choose_save_dir(self):
+        """Выбор папки сохранения принятых факсов (по умолчанию /home/user)."""
+        cur = cfgmod.get("incoming_dir") or str(Path.home())
+        d = QFileDialog.getExistingDirectory(self, "Куда сохранять принятые факсы", cur)
+        if d:
+            cfgmod.set_incoming_dir(d)
+            self._log_lcd("SAVE " + Path(d).name.upper()[:10])
+            self._save_settings_to_spool()
+            self.update()
+
+    def _save_settings_to_spool(self):
+        """Синхронизировать выбор пользователя с серверной конфигурацией.
+
+        1) ~/.config/fax-pdf/config.json — для GUI;
+        2) $SPOOL/etc/recv-archive.conf — путь архивации для recv-monitor.py;
+        3) RingsVoiceAnswer в etc/config.tty* — ответ на голосовые вызовы.
+        Файлы в spool могут требовать прав группы fax — ошибки не фатальны."""
+        try:
+            hx.SPOOL.joinpath("etc").mkdir(parents=True, exist_ok=True)
+            p = hx.SPOOL / "etc" / "recv-archive.conf"
+            p.write_text(f"# задано GUI Fax-PDF\nArchiveDir: {cfgmod.get('incoming_dir')}\n",
+                         encoding="utf-8")
+        except OSError:
+            pass
+        try:
+            hx.apply_voice_settings(self.voice_enabled, self.voice_rings)
+        except Exception:
+            pass
+
+    def _toggle_offhook(self):
+        """«Снять/положить трубку» — приём голосового вызова."""
+        self.offhook = not self.offhook
+        if self.offhook:
+            self._set_mode(MODE_VOICE)
+            self._log_lcd("OFF-HOOK ГОЛОС")
+            self._beep((500, 150))
+        else:
+            self._log_lcd("ON-HOOK")
+            if self.mode == MODE_VOICE:
+                self._set_mode(MODE_IDLE)
+        self.update()
+
     def _start_send(self):
         if self.mode in (MODE_TX, MODE_RX):
             self._beep_err()
@@ -304,17 +371,33 @@ class FaxMachineWidget(QWidget):
         if not re.fullmatch(r"[0-9*#+]{5,24}", num):
             self._show_error("НЕТ НОМЕРА", "Наберите номер на клавиатуре аппарата.")
             return
-        pdf, _ = QFileDialog.getOpenFileName(self, "Документ для отправки",
-                                             str(Path.home()), "PDF (*.pdf)")
-        if not pdf:
+        pdfs, _ = QFileDialog.getOpenFileNames(
+            self, "Документы для отправки (можно выбрать несколько)",
+            cfgmod.get("incoming_dir") or str(Path.home()),
+            "Документы PDF/TIFF (*.pdf *.tif *.tiff)")
+        if not pdfs:
             return
-        self._pending_pdf = Path(pdf)
+        self.incoming_sel = [Path(x) for x in pdfs]
+        self._tx_queue_idx = 0
         self._last_number = num
         self.digits = ""
         self._set_mode(MODE_TX)
         self._log_lcd(f"DIALL {num}")
         self._blink.start()
-        QTimer.singleShot(1200, lambda: self._do_send(num, Path(pdf)))
+        QTimer.singleShot(1200, lambda: self._do_send(num, self.incoming_sel[0]))
+
+    def _send_next_in_batch(self):
+        self._tx_queue_idx += 1
+        if self._tx_queue_idx < len(self.incoming_sel):
+            pdf = self.incoming_sel[self._tx_queue_idx]
+            n = len(self.incoming_sel)
+            i = self._tx_queue_idx + 1
+            self._log_lcd(f"TX {i}/{n} {pdf.name[:12]}")
+            QTimer.singleShot(800, lambda: self._do_send(self._last_number or "", pdf))
+        else:
+            self.incoming_sel = []
+            self._tx_queue_idx = 0
+            self._finish_tx_ok(self._last_number or "")
 
     def _do_send(self, num: str, pdf: Path):
         if self.demo:
@@ -325,8 +408,14 @@ class FaxMachineWidget(QWidget):
             doc = FaxDoc(pdf, self._pdf_pages(pdf), num, "out")
             self.add_tray_doc(doc)
             self.docSent.emit(doc)
-            self._finish_tx_ok(num)
+            # если выбрана пачка файлов — продолжаем с следующим
+            if self.incoming_sel and self._tx_queue_idx < len(self.incoming_sel) - 1:
+                self._send_next_in_batch()
+            else:
+                self.incoming_sel = []
+                self._finish_tx_ok(num)
         except Exception as ex:
+            self.incoming_sel = []
             self._show_error("TX FAIL", str(ex))
 
     def _finish_tx_ok(self, num: str):
@@ -338,12 +427,17 @@ class FaxMachineWidget(QWidget):
     def _stop_current(self):
         if self.mode == MODE_TX:
             self.backend.abort(self._active_job)
+            self.incoming_sel = []          # отменяем всю пачку
             self._blink.stop()
             self._set_mode(MODE_IDLE)
             self._log_lcd("TX CNCL")
         elif self.mode == MODE_RX:
             self._set_mode(MODE_IDLE)
             self._log_lcd("RX ABORT")
+        elif self.mode in (MODE_VOICE, MODE_RING):
+            self.offhook = False
+            self._set_mode(MODE_IDLE)
+            self._log_lcd("CALL END")
         self.update()
 
     def _toggle_hold(self):
@@ -359,9 +453,74 @@ class FaxMachineWidget(QWidget):
         self.update()
 
     def _open_inbox_folder(self):
-        inbox = Path(os.environ.get("FAX_INCOMING", str(Path.home() / "Факсы" / "Входящие")))
+        inbox = Path(cfgmod.get("incoming_dir") or str(Path.home()))
         inbox.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(inbox)))
+
+    # ---------------- голосовые вызовы ----------------
+
+    def set_voice_enabled(self, answer: bool, rings: Optional[int] = None):
+        """Включить/выключить автоответ на голосовые вызовы (RingsVoiceAnswer)."""
+        self.voice_enabled = bool(answer)
+        if rings is not None:
+            self.voice_rings = max(1, min(9, int(rings)))
+        cfgmod.set_voice(self.voice_enabled, self.voice_rings)
+        self._save_settings_to_spool()
+        self._log_lcd("VOICE " + ("ON" if self.voice_enabled else "OFF"))
+        self.update()
+
+    def _check_voice(self):
+        """Новые события из очереди voice-monitor: RING → автоответ по порогу."""
+        if self.held:
+            return
+        try:
+            events = hx.read_voice_calls(limit=8)
+        except Exception:
+            return
+        for ev in events:                      # список newest-first
+            key = ev.get("seen_at") or ev.get("ts") or ""
+            if not key or key in self._seen_voice_ts:
+                continue
+            self._seen_voice_ts.add(key)
+            if ev.get("kind", "").startswith("voice"):
+                self._on_voice_event(ev)
+                break                          # одно событие за тик
+        if len(self._seen_voice_ts) > 500:
+            self._seen_voice_ts = set(list(self._seen_voice_ts)[-200:])
+
+    def _on_voice_event(self, ev: dict):
+        num = ev.get("number") or "неизвестен"
+        self.voiceCall.emit(ev)
+        if self.mode in (MODE_TX, MODE_RX):    # линия занята факсом — не мешаем
+            self._log_lcd(f"VOICE {num} BUSY")
+            return
+        self._set_mode(MODE_RING)
+        self._log_lcd(f"VOICE FROM {num}")
+        self._beep((440, 600))
+        self.update()
+        if self.voice_enabled:
+            # «автоответ»: через N секунд имитируем снятие трубки
+            delay = max(2, self.voice_rings * 1500)
+            QTimer.singleShot(delay, lambda: self._auto_answer(num))
+
+    def _auto_answer(self, num: str):
+        if self.mode != MODE_RING:
+            return
+        self.offhook = True
+        self._set_mode(MODE_VOICE)
+        self._log_lcd(f"ANSWERED {num}")
+        self._beep((500, 150))
+        self.update()
+        # «разговор» идёт, пока оператор не положит трубку кнопкой VOICE/STOP;
+        # автосброс через 60 с, чтобы аппарат не залип в VOICE
+        QTimer.singleShot(60000, lambda: self._hangup_if_voice())
+
+    def _hangup_if_voice(self):
+        if self.mode == MODE_VOICE:
+            self.offhook = False
+            self._set_mode(MODE_IDLE)
+            self._log_lcd("TIMEOUT HANGUP")
+            self.update()
 
     # ---------------- incoming monitoring ----------------
 
@@ -512,9 +671,14 @@ class FaxMachineWidget(QWidget):
                 doc = FaxDoc(pdf, self._pdf_pages(pdf), num, "out")
                 self.add_tray_doc(doc)
                 self.docSent.emit(doc)
+                self.tx_progress = 0
+                # пачка выбранных файлов в демо-режиме — следующий по списку
+                if self.incoming_sel and self._tx_queue_idx < len(self.incoming_sel) - 1:
+                    self._send_next_in_batch()
+                    return
+                self.incoming_sel = []
                 self._blink.stop()
                 self._set_mode(MODE_IDLE)
-                self.tx_progress = 0
                 self._log_lcd(f"SENT OK {num}")
                 self.update()
                 return
@@ -637,7 +801,7 @@ class FaxMachineWidget(QWidget):
         p.setFont(self.f_lcd)
         head_color = {MODE_IDLE: "#7CFC9A", MODE_RING: "#ffe066", MODE_RX: "#66d9ff",
                       MODE_TX: "#ffd166", MODE_BUSY: "#ff6b6b", MODE_ERROR: "#ff5252",
-                      MODE_HOLD: "#c0a6ff"}.get(self.mode, "#7CFC9A")
+                      MODE_HOLD: "#c0a6ff", MODE_VOICE: "#ffb84d"}.get(self.mode, "#7CFC9A")
         p.setPen(QColor(head_color))
         status = self._status_line()
         p.drawText(lcd.adjusted(8, 5, -8, 0), Qt.AlignLeft | Qt.AlignTop, status)
@@ -657,9 +821,12 @@ class FaxMachineWidget(QWidget):
         for k, r in rects.items():
             hovered = self._hover_key == k
             pressed = self._pressed_key == k
-            special = k in ("TxD", "RxD", "STOP", "HOLD")
+            special = k in ("TxD", "RxD", "STOP", "HOLD", "SAVE", "VOICE")
             base = {"TxD": QColor("#1d6b34"), "RxD": QColor("#175a75"),
-                    "STOP": QColor("#8c2020"), "HOLD": QColor("#5a4a17")}.get(
+                    "STOP": QColor("#8c2020"), "HOLD": QColor("#5a4a17"),
+                    "SAVE": QColor("#3a3f47"),
+                    "VOICE": (QColor("#7a5a12") if self.offhook
+                              else QColor("#8a6d1f"))}.get(
                         k, QColor("#3b4048") if not hovered else QColor("#4a505a"))
             if pressed:
                 base = base.darker(130)
@@ -670,13 +837,14 @@ class FaxMachineWidget(QWidget):
             p.setPen(QColor("#e8ecf2"))
             p.setFont(self.f_btn if special else QFont(self.f_btn))
             label = {"TxD": "TX▲ ОТПР.", "RxD": "RX▼ ПРИН.", "STOP": "■ СТОП",
-                     "HOLD": "⏸ HOLD", "REDIAL": "REDIAL", "<": "◀ C"}.get(k, k)
+                     "HOLD": "⏸ HOLD", "REDIAL": "REDIAL", "<": "◀ C",
+                     "SAVE": "💾 ПАПКА", "VOICE": "📞 ТРУБКА"}.get(k, k)
             p.drawText(rr, Qt.AlignCenter, label)
 
         # ---------- индикатор + динамика ----------
         ind_x = panel.right() - 26
         ind_y = panel.top() + 8
-        active = self.mode in (MODE_RX, MODE_TX, MODE_RING)
+        active = self.mode in (MODE_RX, MODE_TX, MODE_RING, MODE_VOICE)
         col = (QColor("#2eff6a") if (not active or self.indicator_on) else QColor("#0b3d16")) \
             if self.mode != MODE_ERROR else QColor("#ff4040")
         rg = QRadialGradient(ind_x + 6, ind_y + 6, 14)
@@ -708,6 +876,8 @@ class FaxMachineWidget(QWidget):
             return "READY"
         if self.mode == MODE_RING:
             return "RING... ВХОД. ВЫЗОВ"
+        if self.mode == MODE_VOICE:
+            return "📞 ГОЛОС. СВЯЗЬ (off-hook)"
         if self.mode == MODE_RX:
             return f"RX ПРИЁМ стр.{self.rx_pages}"
         if self.mode == MODE_TX:
@@ -724,7 +894,7 @@ class FaxMachineWidget(QWidget):
 
     def _set_mode(self, m: str):
         self.mode = m
-        if m in (MODE_RX, MODE_TX, MODE_RING):
+        if m in (MODE_RX, MODE_TX, MODE_RING, MODE_VOICE):
             self._blink.start()
         else:
             self._blink.stop()

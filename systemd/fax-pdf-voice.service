@@ -1,0 +1,25 @@
+[Unit]
+Description=Fax-PDF voice call monitor (HylaFAX rings/answer for Astra 1.7)
+After=hylafax.service
+Wants=hylafax.service
+
+[Service]
+Type=simple
+User=faxmon
+Group=dialout
+Environment=HYLASPOOL=/var/spool/hylafax
+# порт модема для поднятия «трубки» (AT-команды); пусто — только регистрация вызовов
+Environment=FAX_MODEM_TTY=/dev/ttyS0
+# автоответ на голосовые: 1/0 и число колец до ответа (см. RingsVoiceAnswer в HylaFAX)
+Environment=FAX_VOICE_ANSWER=1
+Environment=FAX_VOICE_RINGS=4
+Environment=FAX_VOICE_QUEUE=/var/lib/fax-pdf/voice_calls.jsonl
+ExecStart=/usr/bin/python3 /opt/fax-pdf/voice-monitor.py
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths=/var/lib/fax-pdf /var/spool/hylafax
+
+[Install]
+WantedBy=multi-user.target

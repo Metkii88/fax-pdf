@@ -32,6 +32,26 @@ SPOOL = Path(os.environ.get("HYLASPOOL", "/var/spool/hylafax"))
 RECVQ = SPOOL / "recvq"
 ARCHIVE = SPOOL / "archive" / "recv"
 SRV_IN = Path(os.environ.get("FAX_INCOMING", "/srv/fax/incoming"))
+
+
+def incoming_dir() -> Path:
+    """Папка сохранения принятых факсов.
+
+    Приоритет: env FAX_INCOMING > $SPOOL/etc/recv-archive.conf (путь задаёт
+    GUI Fax-PDF кнопкой SAVE…, по умолчанию /home/user) > /srv/fax/incoming.
+    """
+    try:
+        conf = SPOOL / "etc" / "recv-archive.conf"
+        if conf.is_file():
+            for line in conf.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if line.lower().startswith("archivedir:"):
+                    d = line.split(":", 1)[1].strip()
+                    if d:
+                        return Path(d).expanduser()
+    except OSError:
+        pass
+    return SRV_IN
 LOGDIR = Path(os.environ.get("FAX_LOGDIR", "/var/log/fax-pdf"))
 ADMIN_EMAIL = os.environ.get("FAX_ADMIN", "faxadmin@localhost")
 POLL_SEC = int(os.environ.get("FAX_POLL", "5"))
@@ -134,7 +154,7 @@ def process(path: Path):
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     user = route_user(name)
-    dest_dir = SRV_IN / user / stamp[:4] / stamp[4:6]
+    dest_dir = incoming_dir() / user / stamp[:4] / stamp[4:6]
     dest_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = dest_dir / f"{stamp}-{name}.pdf"
 
@@ -217,7 +237,7 @@ def main():
     # права: только группа fax может читать recvq
     os.umask(0o027)
     seen: set = set()
-    log.info("Fax-PDF monitor запущен. Spool: %s, приём: %s", RECVQ, SRV_IN)
+    log.info("Fax-PDF monitor запущен. Spool: %s, приём: %s", RECVQ, incoming_dir())
 
     while True:
         try:
