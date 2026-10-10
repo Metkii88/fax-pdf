@@ -1,0 +1,26 @@
+Source: fax-pdf
+Section: comm
+Priority: optional
+Maintainer: Fax-PDF Team <faxadmin@localhost>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+
+Package: fax-pdf
+Architecture: all
+Depends: python3, ${misc:Depends},
+ python3-pyqt5,
+ poppler-utils,
+ imagemagick | netpbm,
+ libtiff-tools
+Recommends: hylafax-server, inotify-tools, mailutils
+Description: Графический приёмник и отправка факсов PDF на базе HylaFAX
+ Пакет "Факс-приёмник" для Astra Linux 1.7 (SE): графический интерфейс
+ оператора для приёма входящих факсов (live-показ страниц по мере
+ поступления с модемной линии, предпросмотр принятых PDF), отправки
+ документов PDF через HylaFAX, журнала исходящих/входящих и уведомлений
+ о новых факсах.
+ .
+ Требует настроенный HylaFAX (https://github.com/ifax/HylaFAX) —
+ серверная часть ставится скриптом install-astra.sh или пакетом
+ hylafax-server из репозитория Астры.

@@ -1,0 +1,13 @@
+fax-pdf (1.1.0) astra; urgency=medium
+
+  * Графический интерфейс оператора "Факс-приёмник" (PyQt5): визуальный
+    приём входящих факсов, предпросмотр страниц, отправка PDF, журнал.
+  * Сборка в .deb пакет (debhelper/dh).
+
+ -- Fax-PDF Team <faxadmin@localhost>  Sat, 10 Oct 2026 12:00:00 +0300
+
+fax-pdf (1.0.0) astra; urgency=medium
+
+  * Базовый комплекс на HylaFAX: установка, скрипты отправки/приёма, systemd.
+
+ -- Fax-PDF Team <faxadmin@localhost>  Fri, 09 Oct 2026 12:00:00 +0300

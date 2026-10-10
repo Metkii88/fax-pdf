@@ -1,0 +1,45 @@
+#!/usr/bin/make -f
+# Сборка .deb пакета fax-pdf (GUI-приёмник факсов + серверные компоненты)
+
+export DH_VERBOSE = 1
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	dh_auto_configure
+
+override_dh_auto_build:
+	dh_auto_build
+	python3 gui/gen-launcher.py fax-pdf-gui
+
+override_dh_auto_install:
+	dh_auto_install
+	# --- Python-пакет GUI в /usr/lib/python3/dist-packages ---
+	install -d $(CURDIR)/debian/fax-pdf/usr/lib/python3/dist-packages
+	cp -r gui/faxpdf $(CURDIR)/debian/fax-pdf/usr/lib/python3/dist-packages/
+	rm -rf $(CURDIR)/debian/fax-pdf/usr/lib/python3/dist-packages/faxpdf/__pycache__
+	# --- Лаунчер и ярлык ---
+	install -d $(CURDIR)/debian/fax-pdf/usr/bin
+	install -m 0755 fax-pdf-gui $(CURDIR)/debian/fax-pdf/usr/bin/
+	install -d $(CURDIR)/debian/fax-pdf/usr/share/applications
+	install -m 0644 gui/fax-pdf.desktop $(CURDIR)/debian/fax-pdf/usr/share/applications/
+	install -m 0755 sendfax.sh   $(CURDIR)/debian/fax-pdf/usr/bin/fax-pdf-send
+	install -m 0755 recv-monitor.py $(CURDIR)/debian/fax-pdf/usr/bin/fax-pdf-monitor
+	install -m 0755 scripts/fax-drop $(CURDIR)/debian/fax-pdf/usr/bin/fax-drop
+	# --- Конфигурация HylaFAX (через /etc) ---
+	install -d $(CURDIR)/debian/fax-pdf/etc/hylafax
+	install -m 0644 hylafax/config.local $(CURDIR)/debian/fax-pdf/etc/hylafax/
+	install -m 0644 hylafax/FAXRules     $(CURDIR)/debian/fax-pdf/etc/hylafax/
+	install -m 0644 hylafax/DialRules    $(CURDIR)/debian/fax-pdf/etc/hylafax/
+	install -m 0755 hylafax/notify       $(CURDIR)/debian/fax-pdf/etc/hylafax/
+	install -d $(CURDIR)/debian/fax-pdf/etc/fax-pdf
+	install -m 0644 scripts/routes.json.example $(CURDIR)/debian/fax-pdf/etc/fax-pdf/routes.json
+	# --- systemd-юниты ---
+	install -d $(CURDIR)/debian/fax-pdf/lib/systemd/system
+	install -m 0644 systemd/*.service $(CURDIR)/debian/fax-pdf/lib/systemd/system/
+	# --- Иконка/ярлык ---
+	install -d $(CURDIR)/debian/fax-pdf/usr/share/icons/hicolor/scalable/apps
+	install -m 0644 gui/fax-pdf.svg $(CURDIR)/debian/fax-pdf/usr/share/icons/hicolor/scalable/apps/
+
+.PHONY: override_dh_auto_install

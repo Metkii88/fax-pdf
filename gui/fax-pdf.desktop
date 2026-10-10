@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Факс-приёмник
+Name[ru]=Факс-приёмник
+GenericName=Fax receiver
+Comment=Приём и отправка факсов PDF (HylaFAX)
+Exec=fax-pdf-gui %U
+Icon=fax-pdf
+Terminal=false
+Categories=Office;Network;Qt;
+Keywords=fax;факс;hylafax;pdf;
+StartupNotify=true

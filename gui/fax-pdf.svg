@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <rect x="8" y="14" width="112" height="86" rx="8" fill="#2e5d8f"/>
+  <rect x="16" y="22" width="96" height="62" rx="4" fill="#ffffff"/>
+  <g stroke="#333" stroke-width="3" stroke-linecap="round">
+    <line x1="26" y1="34" x2="102" y2="34"/>
+    <line x1="26" y1="46" x2="94" y2="46"/>
+    <line x1="26" y1="58" x2="100" y2="58"/>
+    <line x1="26" y1="70" x2="82" y2="70"/>
+  </g>
+  <path d="M20 104 h88 v14 h-88 z" fill="#244a73"/>
+  <circle cx="104" cy="111" r="4" fill="#7ee787"/>
+  <text x="64" y="127" font-family="sans-serif" font-size="12" fill="#244a73" text-anchor="middle">PDF FAX</text>
+</svg>
