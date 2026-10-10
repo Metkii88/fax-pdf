@@ -28,7 +28,10 @@ from pathlib import Path
 from datetime import datetime
 
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QSize, QUrl
-from PyQt5.QtGui import QIcon, QPixmap, QImageReader, QDesktopServices, QColor, QPalette
+from PyQt5.QtGui import (
+    QIcon, QPixmap, QImageReader, QDesktopServices, QColor, QPalette,
+    QStandardItemModel, QStandardItem,
+)
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QListWidget, QListWidgetItem, QTextEdit, QLineEdit, QPushButton, QLabel,
@@ -156,11 +159,14 @@ class MainWindow(QMainWindow):
         self.lbl_modem = QLabel("модем: …")
         self.statusBar().addPermanentWidget(self.lbl_modem)
 
-        # -------- tabs --------
+        # -------- tabs (вкладка «аппарат» строится первой) --------
+        self.machine_tab = self._build_machine_tab()
+        self.recv_tab = self._build_recv_tab()
+        self.send_tab = self._build_send_tab()
         self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
-        self.tabs.addTab(self._build_recv_tab(), "📥 Приём")
-        self.tabs.addTab(self._build_send_tab(), "📤 Отправка")
+        self.tabs.addTab(self.machine_tab, "📠 Факс-аппарат")
+        self.tabs.addTab(self.recv_tab, "📥 Приём")
+        self.tabs.addTab(self.send_tab, "📤 Отправка")
 
         # -------- log --------
         self.log = QTextEdit()
@@ -193,10 +199,40 @@ class MainWindow(QMainWindow):
         self.refresh_all()
         self.log_line("Интерфейс запущен. Spool: %s" % hx.SPOOL)
 
-    # ------------------------------------------------------------ приём ---
-    def _build_recv_tab(self):
+    # ------------------------------------------------- вкладка «аппарат» ---
+    def _build_machine_tab(self):
+        """Главная вкладка: факс в виде настоящего факсимильного аппарата."""
+        from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSizePolicy
+        from faxpdf.faxwidget import FaxMachineWidget
         w = QWidget()
         h = QHBoxLayout(w)
+        self.machine = FaxMachineWidget(demo=False)
+        self.machine.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        # связываем аппарат с событиями основного монитора HylaFAX
+        self.machine.docReceived.connect(
+            lambda d: self.log_line(f"АППАРАТ: принят {d.path.name} ({d.pages} стр.) от {d.number}"))
+        self.machine.docSent.connect(
+            lambda d: self.log_line(f"АППАРАТ: отправлен {d.path.name} → {d.number}"))
+        self.machine.error.connect(lambda m: self.log_line("АППАРАТ: ошибка — " + m))
+        side = QVBoxLayout()
+        side.addWidget(QLabel("<b>Факсимильный аппарат</b>"))
+        side.addWidget(QLabel(
+            "Наберите номер на клавиатуре и нажмите <b>TX▲</b> — выбор PDF и отправка.<br>"
+            "Входящие факсы принимаются автоматически: экран покажет RING → RX, "
+            "готовый документ появится в лотке выдачи (клик — открыть).<br>"
+            "<b>RxD</b> — папка «Входящие», <b>STOP</b> — прервать передачу, "
+            "<b>HOLD</b> — пауза приёма."))
+        side.addStretch(1)
+        h.addWidget(self.machine, 3)
+        h.addLayout(side, 1)
+        return w
+
+    # ------------------------------------------------------------ приём ---
+    def _build_recv_tab(self):
+        # ВАЖНО: h — layout БЕЗ родителя; виджеты добавляются в него, затем он
+        # передаётся через addLayout в ol (родитель outer). Иначе PyQt удаляет
+        # дочерние C++-объекты вместе с локальной переменной w (см. историю).
+        h = QHBoxLayout()
 
         left = QVBoxLayout()
         self.lst_recv = QListWidget()
@@ -229,11 +265,14 @@ class MainWindow(QMainWindow):
         self.pg_recv.setRange(0, 0)   # busy-indicator при живом приёме
         self.pg_recv.setVisible(False)
         right.addWidget(self.pg_recv)
-        scroll_pages = QListView()
+        self.thumbs_model = QStandardItemModel(self)
         self.thumbs = QListView()
+        self.thumbs.setModel(self.thumbs_model)
         self.thumbs.setViewMode(QListView.IconMode)
         self.thumbs.setIconSize(QSize(96, 128))
         self.thumbs.setResizeMode(QListView.Adjust)
+        self.thumbs.setMovement(QListView.Static)
+        self.thumbs.setMaximumHeight(170)
         self.thumbs.clicked.connect(
             lambda idx: self.show_page(idx.data(Qt.UserRole)))
         right.addWidget(self.thumbs, 0)
@@ -262,6 +301,22 @@ class MainWindow(QMainWindow):
 
     def on_new_fax(self, rx):
         self.log_line(f"НОВЫЙ ВХОДЯЩИЙ факс от {rx.sender_csid or '?'}: {rx.path.name}")
+        # показать входящий на «аппарате» (вкладка Факс-аппарат)
+        if getattr(self, "machine", None) is not None:
+            try:
+                from faxpdf.faxwidget import FaxDoc, MODE_RX, MODE_IDLE
+                csid = rx.sender_csid or "?"
+                self.machine.add_tray_doc(FaxDoc(rx.path, rx.pages or 1,
+                                                 csid, "in"))
+                self.machine._set_mode(MODE_RX)
+                self.machine._log_lcd(f"RX FROM {csid}")
+                # через 6 с экран возвращается в READY, если приём завершён
+                def _reset():
+                    if self.machine.mode == MODE_RX:
+                        self.machine._set_mode(MODE_IDLE)
+                QTimer.singleShot(6000, _reset)
+            except Exception as e:
+                self.log_line("АППАРАТ: не удалось показать входящий: %s" % e)
         self.lst_recv.addItem(self._item_for(rx))
         item = self.lst_recv.item(self.lst_recv.count() - 1)
         self.lst_recv.setCurrentItem(item)
@@ -327,13 +382,15 @@ class MainWindow(QMainWindow):
         sig = (str(rx.path), pages)
         if getattr(self, "_thumbs_sig", None) != sig:
             self._thumbs_sig = sig
-            self.thumbs.clear()
+            self.thumbs_model.clear()
             for i in range(max(1, pages)):
                 pm = tiff_to_pixmap(rx.path, i)
-                it = QListWidgetItem(QIcon(pm) if pm else QIcon.fromTheme("application-pdf"),
-                                     f"стр. {i + 1}")
-                it.setData(Qt.UserRole, i)
-                self.thumbs.addItem(it)
+                it = QStandardItem(
+                    QIcon(pm) if pm else QIcon.fromTheme("application-pdf"),
+                    f"стр. {i + 1}")
+                it.setData(i, Qt.UserRole)
+                it.setEditable(False)
+                self.thumbs_model.appendRow(it)
 
         pm = tiff_to_pixmap(rx.path, getattr(self, "_cur_page", 0))
         if pm and not pm.isNull():
@@ -494,7 +551,13 @@ def run(argv):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication(argv)
     app.setApplicationName("Факс-приёмник")
-    w = MainWindow()
+    if "--demo" in argv:
+        # демонстрационный режим: факсимильный аппарат с имитацией
+        # звонка/приёма/отправки — работает без HylaFAX и модема
+        from faxpdf.faxwidget import DemoWindow
+        w = DemoWindow()
+    else:
+        w = MainWindow()
     w.show()
     return app.exec_()
 

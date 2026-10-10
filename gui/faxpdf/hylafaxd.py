@@ -309,10 +309,16 @@ def pdf_to_tiff_g4(pdf_path: str) -> str:
 
 
 def archive_received(rx: ReceivedFax, dest_dir: Path) -> Optional[Path]:
-    """Готовый принятый факс: конвертировать в PDF и положить в dest_dir."""
+    """Готовый принятый факс: положить в dest_dir (конвертировать TIFF->PDF при необходимости)."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     if rx.is_pdf:
         dst = dest_dir / rx.path.name
-        shutil.copy2(rx.path, dst)
+        if rx.path.resolve() != dst.resolve():
+            shutil.copy2(rx.path, dst)
         return dst
+    # если файл уже лежит в dest_dir (например, монитор положил PDF рядом с TIFF),
+    # ищем парный PDF с тем же stem — не конвертируем повторно
+    twin = dest_dir / (rx.path.stem + ".pdf")
+    if twin.exists():
+        return twin
     return tiff_to_pdf(rx.path, dest_dir)
