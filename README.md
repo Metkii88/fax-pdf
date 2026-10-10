@@ -2,7 +2,7 @@
 
 Комплекс для работы с факсами в формате **PDF** на базе [HylaFAX](https://github.com/ifax/HylaFAX)
 (форк ifax/HylaFAX) под **Astra Linux SE 1.7 «Генеральный»** (Debian 10 buster-совместимая,
-с мандорным контролем доступа **PARSEC**).
+с мандатным контролем доступа (МКД) **PARSEC**).
 
 ## Состав
 
@@ -11,7 +11,9 @@
 | `install-astra.sh` | Установка зависимостей, сборка HylaFAX из исходников ifax/HylaFAX, настройка PARSEC |
 | `sendfax.sh` | Отправка PDF-файла по факсу (`./sendfax.sh документ.pdf 74951234567`) |
 | `recv-monitor.py` | Сервис мониторинга: принятые факсы конвертируются в PDF, раскладываются по папкам пользователей |
-| `parsec-fax.policy` | Политика PARSEC для безопасной работы faxq/faxgetty/xferfaxd |
+| `parsec-fax.policy` | Политика PARSEC (МКД) для безопасной работы faxq/faxgetty/xferfaxd |
+| `gui/faxpdf/` | Графический интерфейс «Факс-приёмник» (PyQt5): live-мониторинг входящих, отправка PDF, вкладка **«Факсимильный аппарат»** — интерфейс в виде рисованного факса (клавиатура, LCD READY/RING/RX/TX/HOLD/ERROR, лоток выдачи, трубка) |
+| `debian/` | Правила сборки deb-пакета (`dpkg-buildpackage`) |
 | `hylafax/*` | Шаблоны конфигурации HylaFAX (`config.local`, правила приёма/отправки) |
 | `systemd/*.service` | Юниты: hylafax (faxq+faxgetty), fax-xferfaxd, fax-pdf-monitor |
 | `webapp/` | Лёгкий веб-интерфейс (Flask) для загрузки PDF в очередь и просмотра статуса |
@@ -55,7 +57,7 @@ sudo systemctl enable --now hylafax fax-xferfaxd fax-pdf-monitor
    (`tiff2pdf`), вычисляет SHA-256, складывает в `/srv/fax/incoming/<user>/YYYY/MM/`,
    формирует PDF-квитанцию и шлёт уведомление.
 
-### Безопасность (Astra SE 1.7 / PARSEC)
+### Мандатный контроль доступа (МКД) — Astra SE 1.7 / PARSEC
 * Демоны работают под выделенными УЗ `faxq`, `xferfaxd`, `faxmon` с уровнями МЧВ.
 * `parsec-fax.policy`:
   * запись принятого — только в `recvq` с меткой «ДСП» (для служебного пользования);
@@ -78,6 +80,14 @@ sudo systemctl enable --now hylafax fax-xferfaxd fax-pdf-monitor
 /etc/security/parsec/policy.conf — политика PARSEC
 /opt/hylafax/                  — бинарники, собранные из ifax/HylaFAX
 ```
+
+## Графический интерфейс (v1.2.0)
+```bash
+# из исходников:
+python3 -m faxpdf --demo        # демо-режим аппарата без модема (RING/RX/TX имитация)
+fax-pdf-gui                     # после установки deb-пакета
+```
+Устанавливается вместе с пакетом `fax-pdf_*.deb` (`sudo apt install ./fax-pdf_1.2.0_all.deb`).
 
 ## Веб-интерфейс (опционально)
 ```bash
