@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================================
 # install-astra.sh — установка Fax-PDF (HylaFAX) на Astra Linux SE 1.7
-# Собирает HylaFAX из исходников https://github.com/ifax/HylaFAX (v7.x),
+# Собирает HylaFAX из исходников https://github.com/ifax/HylaFAX (ветка master, 6.1-GIT),
 # ставит зависимости, создаёт УЗ/каталоги, юниты systemd и PARSEC-политику.
 # Запускать от root:  sudo ./install-astra.sh
 # ============================================================================
 set -euo pipefail
 
-HYLAFAX_VERSION="${HYLAFAX_VERSION:-v7.0.11}"          # тег в ifax/HylaFAX
-HYLAFAX_URL="https://github.com/ifax/HylaFAX.git"
+# Ветка/тег исходников HylaFAX. В https://github.com/ifax/HylaFAX НЕТ тега
+# v7.0.11 (актуальные ветки: master = 6.1-GIT, теги до HYLAFAX-6_0_7).
+# Значение проверяется перед клонированием; можно переопределить:
+#   HYLAFAX_VERSION=HYLAFAX-6_0_7 sudo ./install-astra.sh
+HYLAFAX_VERSION="${HYLAFAX_VERSION:-master}"           # ветка master (6.1-GIT)
+HYLAFAX_URL="${HYLAFAX_URL:-https://github.com/ifax/HylaFAX.git}"
 BUILD_DIR="/usr/local/src/hylafax-build"
 PREFIX="/opt/hylafax"                                  # бинарники HylaFAX
 SPOOL="/var/spool/hylafax"                             # очередь (spool)
@@ -58,7 +62,23 @@ done
 # ----------------------------------------------------------------------------
 log "Клонирование HylaFAX ${HYLAFAX_VERSION} (${HYLAFAX_URL})..."
 mkdir -p "$BUILD_DIR"
+
+# Проверка существования ветки/тега до клонирования (иначе git падает с
+# "External branch ... not found" — как это было с несуществующим v7.0.11).
+if ! git ls-remote --exit-code "$HYLAFAX_URL" \
+        "refs/heads/$HYLAFAX_VERSION" "refs/tags/$HYLAFAX_VERSION" >/dev/null 2>&1; then
+    err "Реф '$HYLAFAX_VERSION' не найден в $HYLAFAX_URL."
+    err "Доступные ветки:"
+    git ls-remote --heads "$HYLAFAX_URL" | sed 's|.*refs/heads/|  - |' >&2 || true
+    err "Последние теги:"
+    git ls-remote --tags "$HYLAFAX_URL" | awk '{print $2}' | grep -v '\^{}' \
+        | sort -V | tail -8 | sed 's|refs/tags/|  - |' >&2 || true
+    err "Укажите корректную версию:  HYLAFAX_VERSION=master sudo ./install-astra.sh"
+    exit 1
+fi
+
 if [[ ! -d "$BUILD_DIR/HylaFAX/.git" ]]; then
+    rm -rf "$BUILD_DIR/HylaFAX"   # убрать остатки неудачной предыдущей попытки
     git clone --depth 1 --branch "$HYLAFAX_VERSION" "$HYLAFAX_URL" "$BUILD_DIR/HylaFAX"
 else
     git -C "$BUILD_DIR/HylaFAX" fetch --depth 1 origin "$HYLAFAX_VERSION" \
@@ -66,14 +86,21 @@ else
 fi
 
 cd "$BUILD_DIR/HylaFAX"
-log "Конфигурирование и сборка (autogen/configure/make)..."
-./autogen.sh || ./configure --help >/dev/null || true
+log "Конфигурирование и сборка (configure/make)..."
+# В ifax/HylaFAX нет autogen.sh — используется собственный интерактивный
+# configure. Ключи --with-DIR_* задаются напрямую (см. ./configure -help);
+# --nointeractive отключает приглашения, --disable-pam обязателен на Astra SE.
 ./configure \
-    --prefix="$PREFIX" \
-    --with-spool-dir="$SPOOL" \
-    --with-log-dir="$LOGDIR" \
-    --enable-pdf-send=no \
-    --with-TIFFincdir=/usr/include/x86_64-linux-gnu
+    --nointeractive \
+    --disable-nls \
+    --disable-pam \
+    --with-DIR_BIN="$PREFIX/bin" \
+    --with-DIR_SBIN="$PREFIX/sbin" \
+    --with-DIR_LIBEXEC="$PREFIX/sbin" \
+    --with-DIR_LIBDATA="$PREFIX/lib/fax" \
+    --with-DIR_SPOOL="$SPOOL" \
+    --with-DIR_MAN="$PREFIX/share/man" \
+    --with-LOCKFILES=/var/lock
 
 make -j"$(nproc)"
 make install

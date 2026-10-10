@@ -1,4 +1,17 @@
-fax-pdf (1.3.0) astra; urgency=medium
+fax-pdf (1.3.1) astra; urgency=medium
+
+  * install-astra.sh: исправлена ошибка установки — в ifax/HylaFAX нет тега
+    v7.0.11 (git clone --branch падал с "External branch v7.0.11 not found").
+    По умолчанию теперь клонируется ветка master (6.1-GIT); версия переопределяется
+    через HYLAFAX_VERSION (например, HYLAFAX_VERSION=HYLAFAX-6_0_7). Добавлена
+    проверка рефа через git ls-remote до клонирования с выводом доступных веток/тегов.
+    Исправлен вызов configure: у HylaFAX собственный configure без --prefix/--autogen
+    — используются --with-DIR_BIN/SBIN/LIBEXEC/LIBDATA/SPOOL/MAN, --nointeractive,
+    --disable-nls --disable-pam.
+
+ -- Fax-PDF Team <faxadmin@localhost>  Sat, 10 Oct 2026 18:00:00 +0300
+
+fax-pdf (1.3.1) astra; urgency=medium
 
   * Поддержка голосовых вызовов: voice-monitor.py читает RING/VOICE CALL из
     syslog HylaFAX, складывает события в JSONL-очередь; systemd-юнит
