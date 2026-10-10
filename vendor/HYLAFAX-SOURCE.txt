@@ -1,0 +1,18 @@
+HylaFAX — вендорная копия исходников (сборка без доступа к github.com)
+
+Источник:        https://github.com/ifax/HylaFAX.git
+Ветка:           master (6.1-GIT)
+Commit:          c6cac8d8cd0dbe313689ba77023e12bc5b3027be
+Дата фиксации:   2026-10-10
+Лицензия:        HylaFAX license (см. vendor/hylafax/COPYRIGHT), свободная;
+                 авторские права и лицензия сохранены полностью.
+
+Назначение:      install-astra.sh по умолчанию (USE_BUNDLED=1) собирает
+                 HylaFAX из этого каталога и НЕ выполняет git clone,
+                 что снимает проблему отсутствующего тега v7.0.11 и
+                 работает на изолированных (пароликвидных) узлах Astra SE.
+
+Обновление копии:
+    git clone --depth 1 https://github.com/ifax/HylaFAX.git /tmp/hf
+    rm -rf vendor/hylafax && mkdir vendor/hylafax
+    (cd /tmp/hf && tar cf - --exclude=.git .) | (cd vendor/hylafax && tar xf -)

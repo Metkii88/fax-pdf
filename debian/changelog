@@ -1,3 +1,15 @@
+fax-pdf (1.3.2) astra; urgency=medium
+
+  * HylaFAX включён в репозиторий как вендорная копия vendor/hylafax
+    (ifax/HylaFAX master, commit c6cac8d8, лицензия/COPYRIGHT сохранены).
+  * install-astra.sh по умолчанию (USE_BUNDLED=1) собирает из локальной
+    копии БЕЗ git clone с github.com — установка работает на изолированных
+    узлах Astra SE; возврат к клонированию: USE_BUNDLED=0.
+  * debian/rules: пакет теперь включает /opt/fax-pdf/vendor/hylafax,
+    а также install-astra.sh и uninstall.sh в /opt/fax-pdf.
+
+ -- Fax-PDF Team <support@localhost>  Sat, 10 Oct 2026 15:40:00 +0300
+
 fax-pdf (1.3.1) astra; urgency=medium
 
   * install-astra.sh: исправлена ошибка установки — в ifax/HylaFAX нет тега

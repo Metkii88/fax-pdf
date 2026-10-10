@@ -8,7 +8,8 @@
 
 | Файл | Назначение |
 |---|---|
-| `install-astra.sh` | Установка зависимостей, сборка HylaFAX из исходников ifax/HylaFAX, настройка PARSEC |
+| `install-astra.sh` | Установка зависимостей, сборка HylaFAX **из вендорной копии** `vendor/hylafax` (без скачивания с github.com), настройка PARSEC |
+| `vendor/hylafax/` | Зафиксированная копия исходников HylaFAX master (6.1-GIT, commit c6cac8d8) — офлайн-сборка |
 | `sendfax.sh` | Отправка PDF-файла по факсу (`./sendfax.sh документ.pdf 74951234567`) |
 | `recv-monitor.py` | Сервис мониторинга: принятые факсы конвертируются в PDF, раскладываются по папкам пользователей (папка сохранения настраивается GUI, по умолчанию — домашняя) |
 | `voice-monitor.py` | Монитор голосовых вызовов: RING/VOICE CALL из syslog → очередь пропущенных для GUI, автоответ (AT-оффхук) при поддержке модема |
@@ -22,7 +23,9 @@
 ## Быстрый старт (на Astra Linux 1.7, от root)
 
 ```bash
-# 1. Подготовка системы: зависимости + сборка HylaFAX (master, 6.1-GIT) из исходников
+# 1. Подготовка системы: зависимости + сборка HylaFAX из вендорной копии vendor/hylafax
+#    (git clone с github.com НЕ выполняется; для сборки из свежего upstream:
+#     USE_BUNDLED=0 sudo ./install-astra.sh)
 sudo ./install-astra.sh
 
 # 2. Настройка модема (автоопрос портов, генерация etc/config для ttyS0)

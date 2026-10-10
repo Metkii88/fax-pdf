@@ -11,7 +11,7 @@ set -euo pipefail
 # v7.0.11 (актуальные ветки: master = 6.1-GIT, теги до HYLAFAX-6_0_7).
 # Значение проверяется перед клонированием; можно переопределить:
 #   HYLAFAX_VERSION=HYLAFAX-6_0_7 sudo ./install-astra.sh
-HYLAFAX_VERSION="${HYLAFAX_VERSION:-master}"           # ветка master (6.1-GIT)
+HYLAFAX_VERSION="${HYLAFAX_VERSION:-master}"           # ветка master (6.1-GIT); по умолчанию не используется (см. USE_BUNDLED)
 HYLAFAX_URL="${HYLAFAX_URL:-https://github.com/ifax/HylaFAX.git}"
 BUILD_DIR="/usr/local/src/hylafax-build"
 PREFIX="/opt/hylafax"                                  # бинарники HylaFAX
@@ -58,34 +58,56 @@ for u in faxq xferfaxd faxmon; do
 done
 
 # ----------------------------------------------------------------------------
-# 3. Сборка HylaFAX из исходников ifax/HylaFAX
+# 3. Сборка HylaFAX: по умолчанию из вендорной копии vendor/hylafax
+#    (git clone на github.com НЕ выполняется — работает на изолированных узлах).
+#    Переопределение: USE_BUNDLED=0 HYLAFAX_VERSION=<ветка/тег> sudo ./install-astra.sh
 # ----------------------------------------------------------------------------
-log "Клонирование HylaFAX ${HYLAFAX_VERSION} (${HYLAFAX_URL})..."
-mkdir -p "$BUILD_DIR"
+USE_BUNDLED="${USE_BUNDLED:-1}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUNDLED_DIR="$SCRIPT_DIR/vendor/hylafax"
+SRC_DIR="$BUILD_DIR/HylaFAX"
 
-# Проверка существования ветки/тега до клонирования (иначе git падает с
-# "External branch ... not found" — как это было с несуществующим v7.0.11).
-if ! git ls-remote --exit-code "$HYLAFAX_URL" \
-        "refs/heads/$HYLAFAX_VERSION" "refs/tags/$HYLAFAX_VERSION" >/dev/null 2>&1; then
-    err "Реф '$HYLAFAX_VERSION' не найден в $HYLAFAX_URL."
-    err "Доступные ветки:"
-    git ls-remote --heads "$HYLAFAX_URL" | sed 's|.*refs/heads/|  - |' >&2 || true
-    err "Последние теги:"
-    git ls-remote --tags "$HYLAFAX_URL" | awk '{print $2}' | grep -v '\^{}' \
-        | sort -V | tail -8 | sed 's|refs/tags/|  - |' >&2 || true
-    err "Укажите корректную версию:  HYLAFAX_VERSION=master sudo ./install-astra.sh"
-    exit 1
+if [[ "$USE_BUNDLED" = "1" && -f "$BUNDLED_DIR/configure" ]]; then
+    log "Использование вендорной копии HylaFAX ($BUNDLED_DIR, версия $(cat "$BUNDLED_DIR/VERSION" 2>/dev/null || echo '?'))..."
+    mkdir -p "$BUILD_DIR"
+    rm -rf "$SRC_DIR"
+    cp -a "$BUNDLED_DIR" "$SRC_DIR"
+    # очистка возможных артефактов предыдущей сборки внутри копии
+    make -C "$SRC_DIR" distclean >/dev/null 2>&1 || true
+elif [[ "$USE_BUNDLED" = "1" ]]; then
+    err "Вендорная копия не найдена ($BUNDLED_DIR) — переключаюсь на git clone."
+    USE_BUNDLED=0
 fi
 
-if [[ ! -d "$BUILD_DIR/HylaFAX/.git" ]]; then
-    rm -rf "$BUILD_DIR/HylaFAX"   # убрать остатки неудачной предыдущей попытки
-    git clone --depth 1 --branch "$HYLAFAX_VERSION" "$HYLAFAX_URL" "$BUILD_DIR/HylaFAX"
-else
-    git -C "$BUILD_DIR/HylaFAX" fetch --depth 1 origin "$HYLAFAX_VERSION" \
-        && git -C "$BUILD_DIR/HylaFAX" reset --hard FETCH_HEAD
+if [[ "$USE_BUNDLED" != "1" ]]; then
+    log "Клонирование HylaFAX ${HYLAFAX_VERSION} (${HYLAFAX_URL})..."
+    mkdir -p "$BUILD_DIR"
+
+    # Проверка существования ветки/тега до клонирования (в репозитории
+    # НЕТ тега v7.0.11; актуальны master и теги до HYLAFAX-6_0_7).
+    if ! git ls-remote --exit-code "$HYLAFAX_URL" \
+            "refs/heads/$HYLAFAX_VERSION" "refs/tags/$HYLAFAX_VERSION" >/dev/null 2>&1; then
+        err "Реф '$HYLAFAX_VERSION' не найден в $HYLAFAX_URL."
+        err "Доступные ветки:"
+        git ls-remote --heads "$HYLAFAX_URL" | sed 's|.*refs/heads/|  - |' >&2 || true
+        err "Последние теги:"
+        git ls-remote --tags "$HYLAFAX_URL" | awk '{print $2}' | grep -v '\\^{}' \
+            | sort -V | tail -8 | sed 's|refs/tags/|  - |' >&2 || true
+        err "Укажите корректную версию:  HYLAFAX_VERSION=master sudo ./install-astra.sh"
+        err "Или используйте вендорную копию: USE_BUNDLED=1 (по умолчанию)."
+        exit 1
+    fi
+
+    if [[ ! -d "$SRC_DIR/.git" ]]; then
+        rm -rf "$SRC_DIR"   # убрать остатки неудачной предыдущей попытки
+        git clone --depth 1 --branch "$HYLAFAX_VERSION" "$HYLAFAX_URL" "$SRC_DIR"
+    else
+        git -C "$SRC_DIR" fetch --depth 1 origin "$HYLAFAX_VERSION" \
+            && git -C "$SRC_DIR" reset --hard FETCH_HEAD
+    fi
 fi
 
-cd "$BUILD_DIR/HylaFAX"
+cd "$SRC_DIR"
 log "Конфигурирование и сборка (configure/make)..."
 # В ifax/HylaFAX нет autogen.sh — используется собственный интерактивный
 # configure. Ключи --with-DIR_* задаются напрямую (см. ./configure -help);

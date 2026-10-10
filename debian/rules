@@ -40,6 +40,10 @@ override_dh_auto_install:
 	install -m 0755 recv-monitor.py $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
 	install -m 0755 voice-monitor.py $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
 	install -m 0755 sendfax.sh $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
+	install -m 0755 install-astra.sh $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
+	install -m 0644 uninstall.sh $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
+	# --- Вендорная копия исходников HylaFAX (сборка без git clone с github.com) ---
+	cp -a vendor $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor
 	# --- systemd-юниты ---
 	install -d $(CURDIR)/debian/fax-pdf/lib/systemd/system
 	install -m 0644 systemd/*.service $(CURDIR)/debian/fax-pdf/lib/systemd/system/
