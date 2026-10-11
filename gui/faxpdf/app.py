@@ -114,6 +114,12 @@ class ReceiveWorker(QThread):
         self._seen = {}               # name -> pages
 
     def stop(self):
+        # поток может быть уже мёртв (исключение/завершение) — не даём quit_app упасть
+        try:
+            if not self.isRunning():
+                return
+        except RuntimeError:
+            return
         self._stop = True
 
     def run(self):
@@ -781,7 +787,15 @@ class MainWindow(QMainWindow):
     def quit_app(self):
         """Полный выход из приложения (остановка фонового монитора)."""
         self._really_quit = True
-        self.close()
+        try:
+            self.worker.stop()
+            if self.worker.isRunning():
+                self.worker.wait(2000)
+        except Exception:
+            pass
+        if self.tray is not None:
+            self.tray.hide()
+        QApplication.instance().quit()
 
     def closeEvent(self, ev):
         # закрытие окна (крестик) => сворачивание в трей, приложение живёт в фоне
@@ -790,8 +804,9 @@ class MainWindow(QMainWindow):
             self.hide_to_tray()
             self.log_line("Окно свёрнуто в трей. Выход: правый клик по значку → «Выход».")
             return
-        self.worker.stop()
-        self.worker.wait(3000)
+        if not self._really_quit:
+            self.worker.stop()
+            self.worker.wait(3000)
         super().closeEvent(ev)
 
 
