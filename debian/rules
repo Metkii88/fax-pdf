@@ -44,6 +44,16 @@ override_dh_auto_install:
 	install -m 0644 uninstall.sh $(CURDIR)/debian/fax-pdf/opt/fax-pdf/
 	# --- Вендорная копия исходников HylaFAX (сборка без git clone с github.com) ---
 	cp -a vendor $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor
+	# чистим артефакты локальной сборки из копии в пакете (.o/.a/.so, выходы ./configure)
+	find $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor \( -name '*.o' -o -name '*.a' \
+		-o -name '*.so' -o -name '*.so.*' -o -name 'config.cache' -o -name 'config.log' \
+		-o -name 'config.status' -o -name '.c++dependtime' -o -name '.cdependtime' \
+		-o -name 'Makedepend' \) -delete || true
+	find $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor -name 'Makefile' ! -name 'Makefile.in' -delete || true
+	rm -f $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor/hylafax/config.h \
+	      $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor/hylafax/port.h \
+	      $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor/hylafax/defs \
+	      $(CURDIR)/debian/fax-pdf/opt/fax-pdf/vendor/hylafax/rules
 	# --- systemd-юниты ---
 	install -d $(CURDIR)/debian/fax-pdf/lib/systemd/system
 	install -m 0644 systemd/*.service $(CURDIR)/debian/fax-pdf/lib/systemd/system/
