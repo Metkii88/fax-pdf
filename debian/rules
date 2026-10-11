@@ -60,5 +60,8 @@ override_dh_auto_install:
 	# --- Иконка/ярлык ---
 	install -d $(CURDIR)/debian/fax-pdf/usr/share/icons/hicolor/scalable/apps
 	install -m 0644 gui/fax-pdf.svg $(CURDIR)/debian/fax-pdf/usr/share/icons/hicolor/scalable/apps/
+	# PNG-иконка факса — для окна/tray/ярлыка
+	install -d $(CURDIR)/debian/fax-pdf/usr/share/icons/hicolor/512x512/apps
+	install -m 0644 data/fax-pdf.png $(CURDIR)/debian/fax-pdf/usr/share/icons/hicolor/512x512/apps/
 
 .PHONY: override_dh_auto_install

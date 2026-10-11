@@ -37,7 +37,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QTextEdit, QLineEdit, QPushButton, QLabel,
     QFileDialog, QMessageBox, QSplitter, QToolBar, QAction, QStatusBar,
     QListView, QSizePolicy, QProgressBar, QFrame, QSystemTrayIcon,
-    QGroupBox, QCheckBox, QSpinBox,
+    QGroupBox, QCheckBox, QSpinBox, QComboBox,
 )
 
 try:
@@ -47,6 +47,20 @@ except ImportError:
     import hylafaxd as hx
 
 APP_TITLE = "Факс-приёмник — Fax-PDF (HylaFAX)"
+
+
+def _app_icon():
+    """Иконка приложения: PNG-иконка факса (Flaticon) из data/ или /usr/share."""
+    cand = [
+        Path(__file__).resolve().parent / "resources" / "fax-app.png",
+        Path(__file__).resolve().parents[2] / "data" / "fax-pdf.png",
+        Path("/usr/share/icons/hicolor/512x512/apps/fax-pdf.png"),
+        Path("/usr/share/icons/hicolor/scalable/apps/fax-pdf.svg"),
+    ]
+    for c in cand:
+        if c.is_file():
+            return QIcon(str(c))
+    return QIcon.fromTheme("fax", QIcon.fromTheme("scanner"))
 PREVIEW_DIR = Path(os.environ.get("FAX_GUI_PREVIEW",
                                   str(Path.home() / ".cache" / "fax-pdf" / "preview")))
 INBOX_DIR = Path(os.environ.get("FAX_INCOMING", str(Path.home() / "Факсы" / "Входящие")))
@@ -141,6 +155,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_TITLE)
+        ic = _app_icon()
+        if not ic.isNull():
+            self.setWindowIcon(ic)
         self.resize(1100, 720)
         self._active_rx = None
         self._jobs_cache = []
@@ -182,7 +199,7 @@ class MainWindow(QMainWindow):
         # -------- tray + notify --------
         self.tray = None
         if QSystemTrayIcon.isSystemTrayAvailable():
-            self.tray = QSystemTrayIcon(QIcon.fromTheme("fax"), self)
+            self.tray = QSystemTrayIcon(_app_icon(), self)
             self.tray.setToolTip(APP_TITLE)
             self.tray.show()
 
@@ -197,6 +214,7 @@ class MainWindow(QMainWindow):
         self.timer_jobs.timeout.connect(self.refresh_jobs)
         self.timer_jobs.start(10000)
 
+        _fill_modems()
         self.refresh_all()
         self.log_line("Интерфейс запущен. Spool: %s" % hx.SPOOL)
 
@@ -253,6 +271,82 @@ class MainWindow(QMainWindow):
             "<b>HOLD</b> — пауза приёма, <b>VOICE</b> — снять/положить трубку.<br>"
             "Принятые файлы сохраняются в папку по умолчанию (/home/user); "
             "изменить — кнопка <b>SAVE…</b> на аппарате или поле ниже."))
+        grp_m = QGroupBox("Оборудование — модем")
+        gm = QVBoxLayout(grp_m)
+        hm = QHBoxLayout()
+        self.cb_modem = QComboBox()
+        self.cb_modem.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        b_rescan = QPushButton("🔄 Скан")
+        b_rescan.setToolTip("Автоопределение модемов ttyS*/ttyUSB*/ttyACM*")
+        def _fill_modems(select_dev=None):
+            self.cb_modem.clear()
+            try:
+                mods = hx.list_modems()
+            except Exception as e:
+                mods = []
+                self.log_line("ОШИБКА сканирования модемов: " + str(e))
+            if not mods:
+                self.cb_modem.addItem("(модемы не найдены)", "")
+            for m in mods:
+                port = os.path.basename(m["dev"])
+                vidpid = ""
+                if m.get("vendor_id"):
+                    vidpid = f" [{m['vendor_id']}:{m['product_id']}]"
+                tag = " · HylaFAX" if m.get("busy") else ""
+                label = f"{m['dev']} — {m.get('desc', '')}{vidpid}{tag}"
+                self.cb_modem.addItem(label, m["dev"])
+            sel = select_dev or cfgmod.get("modem") or ""
+            idx = self.cb_modem.findData(sel)
+            if idx >= 0:
+                self.cb_modem.setCurrentIndex(idx)
+            elif sel:
+                self.cb_modem.insertItem(0, f"{sel} (сохранённый)", sel)
+                self.cb_modem.setCurrentIndex(0)
+        def _modem_changed(dev):
+            if not dev:
+                return
+            cfgmod.set_modem(dev)
+            try:
+                self.machine.selected_modem = dev
+                self.machine._scan_modems(silent=True)
+                self.machine.update()
+            except Exception:
+                pass
+            self.lbl_modem.setText("модем: " + (hx.modem_status() or dev))
+            self.log_line("Выбран модем: " + dev)
+        def _rescan_modems():
+            _fill_modems()
+            self.log_line(f"Оборудование: найдено {self.cb_modem.count()} портов")
+        b_rescan.clicked.connect(_rescan_modems)
+        self.cb_modem.currentIndexChanged.connect(
+            lambda i: _modem_changed(self.cb_modem.itemData(i)))
+        hm.addWidget(self.cb_modem, 1)
+        hm.addWidget(b_rescan)
+        b_cfg = QPushButton("⚙ Настроить модем (faxaddmodem)")
+        b_cfg.setToolTip("Автонастройка выбранного порта как модема HylaFAX "
+                         "(нужны права root/sudo)")
+        def _cfg_modem():
+            dev = self.cb_modem.currentData()
+            if not dev:
+                QMessageBox.information(self, "Модем", "Сначала выберите устройство.")
+                return
+            port = os.path.basename(dev)
+            r = hx.add_modem(dev)
+            if r["ok"]:
+                hx.restart_getty(port)
+                QMessageBox.information(
+                    self, "faxaddmodem",
+                    f"Модем {port} настроен, faxgetty перезапущен.")
+                _rescan_modems()
+            else:
+                QMessageBox.warning(
+                    self, "faxaddmodem",
+                    "Не удалось настроить:\n" + r["msg"] +
+                    f"\n\nВручную: sudo faxaddmodem {port}")
+        b_cfg.clicked.connect(_cfg_modem)
+        gm.addLayout(hm)
+        gm.addWidget(b_cfg)
+
         grp_d = QGroupBox("Папка для принятых факсов")
         gd = QHBoxLayout(grp_d)
         self.ed_incoming = QLineEdit(str(cfgmod.get("incoming_dir")))
@@ -274,6 +368,7 @@ class MainWindow(QMainWindow):
         gd.addWidget(self.ed_incoming, 1)
         gd.addWidget(b_pick)
         gd.addWidget(b_open)
+        side.addWidget(grp_m)
         side.addWidget(grp_v)
         side.addWidget(grp_d)
         side.addStretch(1)

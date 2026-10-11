@@ -91,6 +91,173 @@ def apply_voice_settings(answer: bool, rings: int,
     return changed
 
 
+# ------------------------------------------------------------- модемы ---
+
+def _udev_prop(devpath: str, prop: str) -> str:
+    """Свойство udev (/sys/.../uevent) без pyserial/pyudev — только чтение файлов."""
+    try:
+        with open(os.path.join(devpath, "uevent"), encoding="utf-8",
+                  errors="ignore") as fh:
+            for line in fh:
+                if line.startswith(prop + "="):
+                    return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def list_modems() -> List[dict]:
+    """Автоопределение модемов (ttyS*/ttyUSB*/ttyACM*): путь устройства,
+    производитель/модель по sysfs/udev, занят ли он faxgetty.
+
+    Возвращает список словарей: dev, real, desc, vendor, product, busy.
+    Никаких внешних зависимостей; работает и без прав root (busy тогда
+    определяется только по syslog-подсказкам)."""
+    import glob as _glob
+    found = []
+    for pat in ("/dev/ttyS*", "/dev/ttyUSB*", "/dev/ttyACM*"):
+        for dev in sorted(_glob.glob(pat)):
+            try:
+                rp = os.path.realpath(dev)
+            except OSError:
+                continue
+            if not os.path.exists(rp):
+                continue
+            entry = {"dev": dev, "real": rp, "desc": "",
+                     "vendor": "", "product": "", "busy": False}
+            # имя tty-устройства (ttyS0/ttyUSB0/ttyACM0) для поиска в sysfs
+            name = os.path.basename(rp)
+            # 1) sysfs-драйвер модема: /sys/class/tty/<name>/device/driver
+            drv = ""
+            try:
+                drv = os.path.basename(
+                    os.readlink(f"/sys/class/tty/{name}/device/driver"))
+            except OSError:
+                pass
+            if drv == "serial8250":
+                drv = ""          # встроенный COM-порт — не «USB»
+            # 2) USB-модемы: idVendor/idProduct из uevent + /dev/bus/usb/*
+            if not drv and ("ttyUSB" in name or "ttyACM" in name):
+                ent = _udev_prop(rp, "DEVPATH")   # .../usbX/X-1:1.0/ttyUSBn
+                mnum = re.search(r"(\d+-[\d.]+)", ent)
+                vid = pid = ""
+                usbdir = None
+                if mnum:
+                    usbdir = f"/sys/bus/usb/devices/{mnum.group(1)}"
+                    def _rf(p):
+                        try:
+                            return Path(p).read_text().strip()
+                        except OSError:
+                            return ""
+                    vid = _rf(os.path.join(usbdir, "idVendor"))
+                    pid = _rf(os.path.join(usbdir, "idProduct"))
+                    vend = _rf(os.path.join(usbdir, "manufacturer"))
+                    prod = _rf(os.path.join(usbdir, "product"))
+                    if vend or prod:
+                        entry["vendor"], entry["product"] = vend, prod
+                        entry["desc"] = " ".join(x for x in (vend, prod) if x)
+                if not entry["desc"]:
+                    # fallback: lsusb -z (NULL-terminated) по bus/dev из DEVPATH
+                    try:
+                        bm = re.search(r"/usb(\d)/(\d+)", ent)
+                        if bm and shutil.which("lsusb"):
+                            out = subprocess.run(["lsusb", "-z"], capture_output=True,
+                                                 text=True, timeout=10).stdout
+                            rec = "\x00".join([f"Bus 0{bm.group(1)}",
+                                                f"Device {int(bm.group(2)):03d}"])
+                            for blk in out.split("\x00\x00"):
+                                if rec in blk.replace("\x00", "\x00"):
+                                    fields = [f for f in blk.split("\x00") if f]
+                                    # формат: Bus.. Device.. ID vvvv:pppp Vendor Product
+                                    for i, f in enumerate(fields):
+                                        if f.startswith("ID ") and i + 2 < len(fields):
+                                            vp = f[3:].split(":")
+                                            if len(vp) == 2:
+                                                entry["vendor"] = fields[i + 1]
+                                                entry["product"] = fields[i + 2]
+                                                entry["desc"] = " ".join(
+                                                    fields[i + 1:i + 3])
+                                                entry["vendor_id"] = vp[0]
+                                                entry["product_id"] = vp[1]
+                                            break
+                    except Exception:
+                        pass
+                if vid and pid and not entry.get("vendor_id"):
+                    entry["vendor_id"], entry["product_id"] = vid, pid
+            # 3) описание по драйверу
+            if not entry["desc"]:
+                if drv:
+                    entry["desc"] = f"USB serial ({drv})"
+                    entry["vendor"], entry["product"] = drv, ""
+                elif name.startswith("ttyS"):
+                    entry["desc"] = "Встроенный последовательный порт (COM)"
+                    entry["vendor"], entry["product"] = "onboard", name[4:]
+            else:
+                entry.setdefault("vendor", "USB")
+            # 4) занятость: настроен ли модем в HylaFAX (etc/config.<port>)
+            #    или активный getty — проверяем по выводу faxstat -s.
+            port = name
+            binf = hylafax_bin("faxstat")
+            if binf:
+                try:
+                    out = subprocess.run([binf, "-s"], capture_output=True,
+                                         text=True, timeout=10).stdout
+                    low = out.lower()
+                    if port.lower() in low and ("active" in low or "ready" in low
+                                                or "down" in low):
+                        entry["busy"] = True
+                except Exception:
+                    pass
+            found.append(entry)
+    return found
+
+
+def modem_for_device(dev: str) -> Optional[str]:
+    """Имя модема HylaFAX (ttyXXX) для пути /dev/ttyXXX."""
+    return os.path.basename(dev) if dev else None
+
+
+def add_modem(dev: str, country: str = "RU", speakerphone: bool = False) -> dict:
+    """Автонастройка модема через faxaddmodem (аналог интерактива:
+    CountryCode + ответ на «prepare the device»). Требует root/sudo.
+
+    Возвращает {'ok': bool, 'msg': str}."""
+    binf = hylafax_bin("faxaddmodem")
+    if not binf:
+        return {"ok": False, "msg": "faxaddmodem не найден (не установлен HylaFAX?)"}
+    port = modem_for_device(dev)
+    cmd = [binf, "-c", country, "-y" if speakerphone else "-n", port]
+    try:
+        res = subprocess.run(cmd, input=f"y\n{port}\ny\n", capture_output=True,
+                             text=True, timeout=180)
+        ok = res.returncode == 0
+        msg = (res.stdout or "")[-500:] + ("\n" + res.stderr[-300:] if res.stderr else "")
+        return {"ok": ok, "msg": msg.strip() or
+                ("модем настроен" if ok else f"код возврата {res.returncode}")}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "msg": str(e)}
+
+
+def restart_getty(port: str) -> dict:
+    """Перезапустить getty HylaFAX на порту (systemd-юнит или kill faxgetty)."""
+    unit = f"hylafax-getty@{port}.service"
+    try:
+        r = subprocess.run(["systemctl", "restart", unit], capture_output=True,
+                           text=True, timeout=60)
+        if r.returncode == 0:
+            return {"ok": True, "msg": f"{unit}: перезапущен"}
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    try:  # fallback: убить faxgetty — faxq перезапустит его сам
+        out = subprocess.run(["pkill", "-f", f"faxgetty.*{port}"],
+                             capture_output=True, text=True, timeout=10)
+        return {"ok": out.returncode == 0,
+                "msg": "faxgetty остановлен, faxq перезапустит"
+                if out.returncode == 0 else "процесс не найден"}
+    except Exception as e:
+        return {"ok": False, "msg": str(e)}
+
+
 @dataclass
 class Job:
     """Задача отправки из очереди HylaFAX."""

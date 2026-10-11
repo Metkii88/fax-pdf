@@ -28,6 +28,7 @@ DEFAULTS = {
     "voice_answer": True,
     "voice_rings": 4,
     "out_sfx": True,
+    "modem": "",                               # выбранный модем (/dev/ttyUSB0 и т.п.)
 }
 
 
@@ -79,3 +80,11 @@ def set_voice(answer: bool, rings: int) -> None:
     cfg["voice_answer"] = bool(answer)
     cfg["voice_rings"] = max(1, min(9, int(rings)))
     save(cfg)
+
+
+def set_modem(dev: str) -> str:
+    """Запомнить выбранный модем (путь устройства, напр. /dev/ttyUSB0)."""
+    cfg = load()
+    cfg["modem"] = dev or ""
+    save(cfg)
+    return cfg["modem"]

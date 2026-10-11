@@ -1,3 +1,11 @@
+fax-pdf (1.3.3-1) astra; urgency=medium
+
+  * v1.3.3: автоопределение модемов (ttyS*/ttyUSB*/ttyACM*) с выбором в GUI
+    и на «аппарате» (плашка MODEM + кнопка), faxaddmodem из интерфейса;
+    PNG-иконка приложения (окно/tray/.desktop).
+
+ -- Fax-PDF Project <fax-pdf@localhost>  Sun, 11 Oct 2026 09:00:00 +0300
+
 fax-pdf (1.3.2-1) astra; urgency=medium
 
   * Применены патчи сборки HylaFAX к вендорной копии: configure корректно

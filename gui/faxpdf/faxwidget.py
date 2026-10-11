@@ -159,6 +159,10 @@ class FaxMachineWidget(QWidget):
         self.offhook = False             # «трубка поднята»
         self._ring_count = 0
         self._seen_voice_ts = set()
+        # --- модем (автоопределение ttyS*/ttyUSB*/ttyACM*)
+        self.modems: List[dict] = []
+        self.selected_modem: Optional[str] = cfgmod.get("modem") or None
+        self._scan_modems(silent=True)
 
         # анимация мигания индикатора
         self._blink = QTimer(self, interval=450, timeout=self._toggle_blink)
@@ -233,6 +237,7 @@ class FaxMachineWidget(QWidget):
         by = panel.bottom() - 34
         r["SAVE"] = QRect(x0, by, 2 * kw + gx, 26)
         r["VOICE"] = QRect(x0 + 2 * (kw + gx) + 8, by, 2 * kw + gx, 26)
+        r["MODEM"] = QRect(x0 + 4 * (kw + gx) + 16, by, 2 * kw + gx, 26)
         # функциональные кнопки справа от клавиатуры
         fx = panel.right() - 96
         fy = panel.top() + 12
@@ -242,6 +247,12 @@ class FaxMachineWidget(QWidget):
         r["STOP"] = QRect(fx, fy + 2 * (fh + 6), fw, fh)
         r["HOLD"] = QRect(fx, fy + 3 * (fh + 6), fw, fh)
         return r
+
+    def _modem_rect(self, panel: QRect) -> QRect:
+        """Плашка текущего модема в верхней части корпуса (справа)."""
+        b = self.rect()
+        w = min(250, max(150, int(b.width() * 0.30)))
+        return QRect(b.right() - w - 18, int(b.height() * 0.355), w, 20)
 
     def _lcd_rect(self, panel: QRect) -> QRect:
         w = min(230, max(150, panel.width() // 3))
@@ -280,6 +291,11 @@ class FaxMachineWidget(QWidget):
         if self._tray_slot().adjusted(-6, -18, 6, 6).contains(pos) and self.tray_docs:
             self.open_tray_doc(len(self.tray_docs) - 1)
             return
+        # клик по плашке модема — то же, что кнопка MODEM
+        if self._modem_rect(self._panel_rect()).contains(pos):
+            self._pressed_key = "MODEM"
+            self.update()
+            return
         panel = self._panel_rect()
         for k, rect in self._key_rects(panel).items():
             if rect.contains(pos):
@@ -311,6 +327,9 @@ class FaxMachineWidget(QWidget):
         elif k == "VOICE":
             self._toggle_offhook()
             return
+        elif k == "MODEM":
+            self._pick_modem()
+            return
         else:
             if len(self.digits) < 24:
                 self.digits += k
@@ -330,6 +349,106 @@ class FaxMachineWidget(QWidget):
             self._log_lcd("SAVE " + Path(d).name.upper()[:10])
             self._save_settings_to_spool()
             self.update()
+
+    # ---------------- модем: автоопределение и выбор ----------------
+
+    def _scan_modems(self, silent: bool = False) -> None:
+        """Автоопределение доступных модемов (ttyS*/ttyUSB*/ttyACM*)."""
+        try:
+            self.modems = hx.list_modems()
+        except Exception as e:
+            if not silent:
+                self._show_error("СКАН", str(e))
+            self.modems = []
+        # если сохранённый модем исчез — сбрасываем выбор; если не выбран и
+        # найден ровно один — выбираем его автоматически
+        devs = [m["dev"] for m in self.modems]
+        if self.selected_modem and self.selected_modem not in devs:
+            self.selected_modem = None
+        if not self.selected_modem and len(devs) == 1:
+            self.selected_modem = devs[0]
+            cfgmod.set_modem(devs[0])
+        if not silent:
+            self._log_lcd(f"MODEMS {len(self.modems)}")
+            if not self.modems:
+                QMessageBox.information(
+                    self, "Модемы",
+                    "Последовательные порты (ttyS*/ttyUSB*/ttyACM*) не найдены.\n"
+                    "Подключите модем Class 1/2.0 и повторите сканирование.")
+        self.update()
+
+    def _modem_label(self) -> str:
+        """Короткая подпись текущего модема для плашки на корпусе."""
+        if not self.selected_modem:
+            return "🔌 МОДЕМ: нет"
+        port = os.path.basename(self.selected_modem)
+        for m in self.modems:
+            if m["dev"] == self.selected_modem:
+                v = (m.get("vendor") or "").strip()
+                p = (m.get("product") or "").strip()
+                name = " ".join(x for x in (v[:10], p[:14]) if x) or m.get("desc", "")
+                return f"🔌 {port} · {name[:24]}"
+        return f"🔌 {port}"
+
+    def _pick_modem(self) -> None:
+        """Диалог выбора модема из автоматически определённых устройств."""
+        self._scan_modems(silent=True)
+        items = []
+        labels = []
+        for m in self.modems:
+            port = os.path.basename(m["dev"])
+            desc = m.get("desc") or ""
+            vidpid = ""
+            if m.get("vendor_id"):
+                vidpid = f" [{m['vendor_id']}:{m['product_id']}]"
+            busy = "  ⚕ HylaFAX" if m.get("busy") else ""
+            labels.append(f"{m['dev']} — {desc}{vidpid}{busy}")
+            items.append(m)
+        if not items:
+            self._scan_modems(silent=False)   # покажет «не найдено»
+            return
+        labels.append("🔄 Повторить сканирование…")
+        from PyQt5.QtWidgets import QInputDialog
+        cur = next((i for i, m in enumerate(items)
+                    if m["dev"] == self.selected_modem), 0)
+        choice, ok = QInputDialog.getItem(
+            self, "Выбор модема",
+            "Обнаруженные устройства (ttyS/ttyUSB/ttyACM):", labels,
+            min(cur, len(labels) - 1), False)
+        if not ok:
+            return
+        idx = labels.index(choice) if choice in labels else -1
+        if idx < 0 or idx >= len(items):
+            self._scan_modems(silent=False)
+            return
+        sel = items[idx]
+        self.selected_modem = sel["dev"]
+        cfgmod.set_modem(sel["dev"])
+        self._log_lcd("MODEM " + os.path.basename(sel["dev"]).upper()[:10])
+        # если модем ещё не настроен в HylaFAX — предложить автонастройку
+        if not sel.get("busy"):
+            res = QMessageBox.question(
+                self, "Настроить модем?",
+                f"Устройство {sel['dev']} ({sel.get('desc', '')}) ещё не настроено\n"
+                "как модем факса в HylaFAX. Выполнить faxaddmodem сейчас?\n"
+                "(требуются права root/sudo)",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+            if res == QMessageBox.Yes:
+                r = hx.add_modem(sel["dev"])
+                if r["ok"]:
+                    self._log_lcd("CFG OK")
+                    QMessageBox.information(
+                        self, "faxaddmodem",
+                        f"Модем {os.path.basename(sel['dev'])} настроен.\n"
+                        "faxgetty перезапущен автоматически.")
+                    hx.restart_getty(os.path.basename(sel["dev"]))
+                else:
+                    QMessageBox.warning(
+                        self, "faxaddmodem",
+                        "Не удалось настроить модем:\n" + r["msg"] +
+                        f"\n\nМожно выполнить вручную:\n  sudo faxaddmodem "
+                        f"{os.path.basename(sel['dev'])}")
+        self.update()
 
     def _save_settings_to_spool(self):
         """Синхронизировать выбор пользователя с серверной конфигурацией.
@@ -821,10 +940,10 @@ class FaxMachineWidget(QWidget):
         for k, r in rects.items():
             hovered = self._hover_key == k
             pressed = self._pressed_key == k
-            special = k in ("TxD", "RxD", "STOP", "HOLD", "SAVE", "VOICE")
+            special = k in ("TxD", "RxD", "STOP", "HOLD", "SAVE", "VOICE", "MODEM")
             base = {"TxD": QColor("#1d6b34"), "RxD": QColor("#175a75"),
                     "STOP": QColor("#8c2020"), "HOLD": QColor("#5a4a17"),
-                    "SAVE": QColor("#3a3f47"),
+                    "SAVE": QColor("#3a3f47"), "MODEM": QColor("#204a63"),
                     "VOICE": (QColor("#7a5a12") if self.offhook
                               else QColor("#8a6d1f"))}.get(
                         k, QColor("#3b4048") if not hovered else QColor("#4a505a"))
@@ -838,8 +957,25 @@ class FaxMachineWidget(QWidget):
             p.setFont(self.f_btn if special else QFont(self.f_btn))
             label = {"TxD": "TX▲ ОТПР.", "RxD": "RX▼ ПРИН.", "STOP": "■ СТОП",
                      "HOLD": "⏸ HOLD", "REDIAL": "REDIAL", "<": "◀ C",
-                     "SAVE": "💾 ПАПКА", "VOICE": "📞 ТРУБКА"}.get(k, k)
+                     "SAVE": "💾 ПАПКА", "VOICE": "📞 ТРУБКА",
+                     "MODEM": "🔌 МОДЕМ"}.get(k, k)
             p.drawText(rr, Qt.AlignCenter, label)
+
+        # ---------- плашка текущего модема (клик = выбор/скан) ----------
+        mr = QRectF(self._modem_rect(panel))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(16, 22, 28, 220))
+        p.drawRoundedRect(mr, 5, 5)
+        mcol = "#9fd0ff" if self.selected_modem else "#e8b04a"
+        p.setPen(QColor(mcol))
+        mf = QFont(self.f_lbl)
+        mf.setPointSizeF(max(7.0, mf.pointSizeF()))
+        p.setFont(mf)
+        p.drawText(mr.adjusted(7, 0, -7, 0), Qt.AlignVCenter | Qt.AlignLeft,
+                   self._modem_label())
+        p.setPen(QColor("#5b6672"))
+        p.setFont(self.f_lbl)
+        p.drawText(mr.adjusted(7, 0, -7, 0), Qt.AlignVCenter | Qt.AlignRight, "выбрать ▾")
 
         # ---------- индикатор + динамика ----------
         ind_x = panel.right() - 26
