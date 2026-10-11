@@ -169,8 +169,12 @@ class MainWindow(QMainWindow):
         act_refresh = QAction("⟳ Обновить", self)
         act_refresh.triggered.connect(self.refresh_all)
         tb.addAction(act_refresh)
+        act_min = QAction("🔽 В трей", self)
+        act_min.setToolTip("Свернуть окно в системный трей; приём факсов продолжается в фоне")
+        act_min.triggered.connect(self.hide_to_tray)
+        tb.addAction(act_min)
         act_quit = QAction("Выход", self)
-        act_quit.triggered.connect(self.close)
+        act_quit.triggered.connect(self.quit_app)
         tb.addAction(act_quit)
 
         self.statusBar().showMessage("Готов")
@@ -196,11 +200,24 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.log, 1)
         self.setCentralWidget(central)
 
-        # -------- tray + notify --------
+        # -------- tray + notify (сворачивание в трей, работа в фоне) --------
+        self._really_quit = False
         self.tray = None
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray = QSystemTrayIcon(_app_icon(), self)
             self.tray.setToolTip(APP_TITLE)
+            from PyQt5.QtWidgets import QMenu
+            m = QMenu()
+            a_show = m.addAction("📠 Открыть факс-приёмник")
+            a_show.triggered.connect(self.show_from_tray)
+            a_min = m.addAction("🔽 Свернуть в трей")
+            a_min.triggered.connect(self.hide_to_tray)
+            m.addSeparator()
+            a_quit = m.addAction("✕ Выход")
+            a_quit.triggered.connect(self.quit_app)
+            self.tray_menu = m
+            self.tray.setContextMenu(m)
+            self.tray.activated.connect(self._on_tray_activated)
             self.tray.show()
 
         # -------- workers/timers --------
@@ -214,11 +231,41 @@ class MainWindow(QMainWindow):
         self.timer_jobs.timeout.connect(self.refresh_jobs)
         self.timer_jobs.start(10000)
 
-        _fill_modems()
+        self._fill_modems()
         self.refresh_all()
         self.log_line("Интерфейс запущен. Spool: %s" % hx.SPOOL)
+        if "--minimized" in sys.argv or os.environ.get("FAX_START_MINIMIZED") == "1":
+            self.hide_to_tray(notify=False)
+        if self.tray is None:
+            self.log_line("Трей недоступен в текущем окружении — закрытие окна завершит приложение.")
 
     # ------------------------------------------------- вкладка «аппарат» ---
+    def _fill_modems(self, select_dev=None):
+        """Заполнить комбобокс модемов (ttyS*/ttyUSB*/ttyACM*) и выбрать сохранённый."""
+        from faxpdf import settings as cfgmod
+        self.cb_modem.clear()
+        try:
+            mods = hx.list_modems()
+        except Exception as e:
+            mods = []
+            self.log_line("ОШИБКА сканирования модемов: " + str(e))
+        if not mods:
+            self.cb_modem.addItem("(модемы не найдены)", "")
+        for m in mods:
+            vidpid = ""
+            if m.get("vendor_id"):
+                vidpid = f" [{m['vendor_id']}:{m['product_id']}]"
+            tag = " · HylaFAX" if m.get("busy") else ""
+            label = f"{m['dev']} — {m.get('desc', '')}{vidpid}{tag}"
+            self.cb_modem.addItem(label, m["dev"])
+        sel = select_dev or cfgmod.get("modem") or ""
+        idx = self.cb_modem.findData(sel)
+        if idx >= 0:
+            self.cb_modem.setCurrentIndex(idx)
+        elif sel:
+            self.cb_modem.insertItem(0, f"{sel} (сохранённый)", sel)
+            self.cb_modem.setCurrentIndex(0)
+
     def _build_machine_tab(self):
         """Главная вкладка: факс в виде настоящего факсимильного аппарата."""
         from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSizePolicy
@@ -278,30 +325,8 @@ class MainWindow(QMainWindow):
         self.cb_modem.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         b_rescan = QPushButton("🔄 Скан")
         b_rescan.setToolTip("Автоопределение модемов ttyS*/ttyUSB*/ttyACM*")
-        def _fill_modems(select_dev=None):
-            self.cb_modem.clear()
-            try:
-                mods = hx.list_modems()
-            except Exception as e:
-                mods = []
-                self.log_line("ОШИБКА сканирования модемов: " + str(e))
-            if not mods:
-                self.cb_modem.addItem("(модемы не найдены)", "")
-            for m in mods:
-                port = os.path.basename(m["dev"])
-                vidpid = ""
-                if m.get("vendor_id"):
-                    vidpid = f" [{m['vendor_id']}:{m['product_id']}]"
-                tag = " · HylaFAX" if m.get("busy") else ""
-                label = f"{m['dev']} — {m.get('desc', '')}{vidpid}{tag}"
-                self.cb_modem.addItem(label, m["dev"])
-            sel = select_dev or cfgmod.get("modem") or ""
-            idx = self.cb_modem.findData(sel)
-            if idx >= 0:
-                self.cb_modem.setCurrentIndex(idx)
-            elif sel:
-                self.cb_modem.insertItem(0, f"{sel} (сохранённый)", sel)
-                self.cb_modem.setCurrentIndex(0)
+        def _fill_modems(select_dev=None):    # noqa: E301 (метод класса ниже)
+            return self._fill_modems(select_dev)
         def _modem_changed(dev):
             if not dev:
                 return
@@ -469,10 +494,8 @@ class MainWindow(QMainWindow):
         self.lst_recv.addItem(self._item_for(rx))
         item = self.lst_recv.item(self.lst_recv.count() - 1)
         self.lst_recv.setCurrentItem(item)
-        if self.tray:
-            self.tray.showMessage("Входящий факс",
-                                  f"От: {rx.sender_csid or 'неизвестно'}",
-                                  QSystemTrayIcon.Information, 8000)
+        _notify(self.tray, "Входящий факс",
+                f"От: {rx.sender_csid or 'неизвестно'}\n{rx.path.name}", "info")
         QApplication.beep()
 
     def on_update_fax(self, rx):
@@ -690,12 +713,24 @@ class MainWindow(QMainWindow):
 
     def refresh_jobs(self):
         jobs = hx.queue_jobs()
+        # отслеживаем завершение задач: уведомляем, даже если окно свёрнуто в трей
+        prev = {j.jobid: j.status for j in self._jobs_cache}
+        cur = {j.jobid: j for j in jobs}
+        for jid, st in prev.items():
+            if jid not in cur and "отправ" not in st.lower():
+                _notify(self.tray, "Отправка факса",
+                        f"Задача {jid} покинула очередь (проверьте журнал).",
+                        "warn")
         self._jobs_cache = jobs
         self.lst_jobs.clear()
         for j in jobs:
             it = QListWidgetItem(f"[{j.jobid}] → {j.number}  {j.info[:60]}")
             it.setData(Qt.UserRole, j.jobid)
             self.lst_jobs.addItem(it)
+            old = prev.get(j.jobid, "")
+            if old != j.status and "отправ" in j.status.lower():
+                _notify(self.tray, "Факс отправлен",
+                        f"[{j.jobid}] → {j.number}", "info")
         st = hx.modem_status()
         self.lbl_modem.setText("модем: " + st)
 
@@ -718,16 +753,81 @@ class MainWindow(QMainWindow):
     def refresh_all(self):
         self.refresh_jobs()
 
+    # ---- трей / фоновый режим --------------------------------------------
+    def hide_to_tray(self, notify=True):
+        """Свернуть окно в трей; мониторинг и приём продолжают работать."""
+        if self.tray is None:
+            self.log_line("Трей недоступен — окно не сворачивается.")
+            return
+        self.hide()
+        if notify:
+            self.tray.showMessage(
+                APP_TITLE, "Факс-приёмник работает в фоне.\n"
+                           "Двойной клик по значку — открыть окно.",
+                QSystemTrayIcon.Information, 4000)
+
+    def show_from_tray(self):
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _on_tray_activated(self, reason):
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            if self.isVisible():
+                self.hide_to_tray(notify=False)
+            else:
+                self.show_from_tray()
+
+    def quit_app(self):
+        """Полный выход из приложения (остановка фонового монитора)."""
+        self._really_quit = True
+        self.close()
+
     def closeEvent(self, ev):
+        # закрытие окна (крестик) => сворачивание в трей, приложение живёт в фоне
+        if self.tray is not None and not self._really_quit:
+            ev.ignore()
+            self.hide_to_tray()
+            self.log_line("Окно свёрнуто в трей. Выход: правый клик по значку → «Выход».")
+            return
         self.worker.stop()
         self.worker.wait(3000)
         super().closeEvent(ev)
+
+
+def _notify(tray, title, body, level="info", ms=8000):
+    """Всплывающее уведомление: сначала через трей, затем fallback на notify-send."""
+    if tray is not None:
+        kind = {"info": QSystemTrayIcon.Information,
+                "warn": QSystemTrayIcon.Warning,
+                "err": QSystemTrayIcon.Critical}.get(level, QSystemTrayIcon.Information)
+        tray.showMessage(title, body, kind, ms)
+        return True
+    for prog in ("notify-send", "zenity"):
+        exe = shutil.which(prog)
+        if not exe:
+            continue
+        try:
+            if prog == "notify-send":
+                subprocess.run([exe, "-t", str(ms * 1000), title, body],
+                               timeout=5, capture_output=True)
+            else:
+                subprocess.run([exe, "--notification",
+                                f"--text={title}: {body}"],
+                               timeout=5, capture_output=True)
+            return True
+        except Exception:
+            pass
+    return False
 
 
 def run(argv):
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     app = QApplication(argv)
     app.setApplicationName("Факс-приёмник")
+    app.setApplicationDisplayName(APP_TITLE)
+    # не завершать приложение при закрытии последнего окна — живём в трее
+    app.setQuitOnLastWindowClosed(False)
     if "--demo" in argv:
         # демонстрационный режим: факсимильный аппарат с имитацией
         # звонка/приёма/отправки — работает без HylaFAX и модема
@@ -735,7 +835,10 @@ def run(argv):
         w = DemoWindow()
     else:
         w = MainWindow()
-    w.show()
+    if "--minimized" in argv or os.environ.get("FAX_START_MINIMIZED") == "1":
+        pass  # окно уже скрыто в конструкторе (hide_to_tray)
+    else:
+        w.show()
     return app.exec_()
 
 
