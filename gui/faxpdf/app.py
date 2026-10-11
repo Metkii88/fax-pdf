@@ -47,7 +47,7 @@ except ImportError:
     import hylafaxd as hx
 
 APP_TITLE = "Факс-приёмник — Fax-PDF (HylaFAX)"
-APP_VERSION = "1.3.7"
+APP_VERSION = "1.3.8"
 
 
 def _about_text():
@@ -57,7 +57,7 @@ def _about_text():
         "Astra Linux 1.7 SE на основе HylaFAX.</p>"
         "<p><b>Возможности:</b> графический интерфейс «Факсимильный аппарат», "
         "автоопределение модемов (ttyS*/ttyUSB*/ttyACM*), голосовые вызовы, "
-        "мандатный контроль доступа (МКД/PARSEC), сворачивание в трей, "
+        "мандатный контроль целостности (МКЦ/PARSEC), сворачивание в трей, "
         "фоновый приём с уведомлениями.</p>"
         "<hr>"
         "<p><b>Автор:</b> Claude (AI-ассистент Anthropic)<br>"
