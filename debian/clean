@@ -1,3 +1,11 @@
 fax-pdf
 *.pyc
 __pycache__
+vendor/hylafax/Makefile
+vendor/hylafax/config.h
+vendor/hylafax/port.h
+vendor/hylafax/defs
+vendor/hylafax/rules
+vendor/hylafax/config.cache
+vendor/hylafax/config.log
+vendor/hylafax/config.status
