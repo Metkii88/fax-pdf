@@ -85,13 +85,18 @@ sudo systemctl enable --now hylafax fax-xferfaxd fax-pdf-monitor
 /opt/hylafax/                  — бинарники, собранные из ifax/HylaFAX
 ```
 
-## Графический интерфейс (v1.3.0)
+## Графический интерфейс (v1.3.7)
 ```bash
 # из исходников:
 python3 -m faxpdf --demo        # демо-режим аппарата без модема (RING/RX/TX имитация)
 fax-pdf-gui                     # после установки deb-пакета
 ```
-Устанавливается вместе с пакетом `fax-pdf_*.deb` (`sudo apt install ./fax-pdf_1.3.2-1_all.deb`).
+Устанавливается вместе с пакетом `fax-pdf_*.deb` (`sudo apt install ./fax-pdf_1.3.7-1_all.deb`).
+
+### Новое в v1.3.7
+- Меню **«Справка → О программе»** в верхней строке меню окна: диалог с иконкой факса,
+  версией и описанием возможностей; указано авторство — реализация: Claude (AI-ассистент
+  Anthropic), идея и постановка задачи: пользователь (заказчик).
 
 ### Сборка HylaFAX из вендорной копии (v1.3.2)
 HylaFAX (ifax/HylaFAX master, commit c6cac8d8) включён в репозиторий как `vendor/hylafax/` —

@@ -47,6 +47,23 @@ except ImportError:
     import hylafaxd as hx
 
 APP_TITLE = "Факс-приёмник — Fax-PDF (HylaFAX)"
+APP_VERSION = "1.3.7"
+
+
+def _about_text():
+    return (
+        "<h3>Факс-приёмник (Fax-PDF) %s</h3>"
+        "<p>Программа приёма и отправки факсов в формате PDF для "
+        "Astra Linux 1.7 SE на основе HylaFAX.</p>"
+        "<p><b>Возможности:</b> графический интерфейс «Факсимильный аппарат», "
+        "автоопределение модемов (ttyS*/ttyUSB*/ttyACM*), голосовые вызовы, "
+        "мандатный контроль доступа (МКД/PARSEC), сворачивание в трей, "
+        "фоновый приём с уведомлениями.</p>"
+        "<hr>"
+        "<p><b>Автор:</b> Claude (AI-ассистент Anthropic)<br>"
+        "<b>Идея, постановка задачи и дизайн:</b> пользователь (заказчик)<br>"
+        "Проект создан по замыслу пользователя: https://github.com/Metkii88/fax-pdf</p>"
+    ) % APP_VERSION
 
 
 def _app_icon():
@@ -186,6 +203,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Готов")
         self.lbl_modem = QLabel("модем: …")
         self.statusBar().addPermanentWidget(self.lbl_modem)
+
+        # -------- главное меню (верхняя строка): Справка → О программе ----
+        from PyQt5.QtWidgets import QMenu
+        mb = self.menuBar()
+        m_help = QMenu("Справка", self)
+        act_about = QAction("ℹ️ О программе", self)
+        act_about.setMenuRole(QAction.AboutRole)
+        act_about.triggered.connect(self.show_about)
+        m_help.addAction(act_about)
+        mb.addMenu(m_help)
 
         # -------- tabs (вкладка «аппарат» строится первой) --------
         self.machine_tab = self._build_machine_tab()
@@ -796,6 +823,19 @@ class MainWindow(QMainWindow):
         if self.tray is not None:
             self.tray.hide()
         QApplication.instance().quit()
+
+    # ---- «О программе» ----------------------------------------------------
+    def show_about(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("О программе")
+        ic = _app_icon()
+        if not ic.isNull():
+            box.setIconPixmap(ic.pixmap(QSize(64, 64)))
+        else:
+            box.setIcon(QMessageBox.Information)
+        box.setText(_about_text())
+        box.setStandardButtons(QMessageBox.Ok)
+        box.exec_()
 
     def closeEvent(self, ev):
         # закрытие окна (крестик) => сворачивание в трей, приложение живёт в фоне
