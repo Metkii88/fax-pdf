@@ -93,6 +93,112 @@ def apply_voice_settings(answer: bool, rings: int,
 
 # ------------------------------------------------------------- модемы ---
 
+# Поддерживаемые win-модемы Conexant HSF (Linuxant/Intel "hsfmodem", в Astra —
+# пакет hsfmodem / DGCPCI56).  У таких модемов нет полноценного AT-порта для
+# faxgetty; факс и голос обслуживает драйвер через виртуальный последовательный
+# порт /dev/ttySHSF* (эмуляция Class 2.0).  Для голоса дополнительно нужен
+# ALSA-конфиг voip/ccmux (см. setup_vpmcall).
+HSF_DRIVERS = ("hsf", "dgcpci56", "lt_modem", "winmodem")
+HSF_VENDOR_IDS = {   # USB idVendor:idProduct известных HSF/win-модемов
+    "14f1": "Conexant (HSF)",       # Conexant Systems (Rockwell) — USB SoftModem
+    "16ec": "USRobotics (HSF)",
+    "0a7c": "OSS/Orient (HSF)",
+}
+
+
+def is_hsf_device(name: str, drv: str = "", desc: str = "") -> bool:
+    """True, если устройство похоже на модем HSF (ttySHSF*/драйвер hsf)."""
+    s = f"{name} {drv} {desc}".lower()
+    return any(k in s for k in HSF_DRIVERS) or "shsf" in s
+
+
+def hsf_status() -> dict:
+    """Состояние поддержки HSF в системе: драйвер, модуль, утилиты vpm.
+
+    Возвращает {'driver_loaded': bool, 'vpm_available': bool,
+               'vpmcall': bool, 'ports': [ttySHSF*], 'notes': str}.
+    """
+    res = {"driver_loaded": False, "vpm_available": False,
+           "vpmcall": False, "ports": [], "notes": ""}
+    try:  # модуль ядра hsf (или dgcpci56_v80 для PCI-варианта Conexant)
+        out = subprocess.run(["lsmod"], capture_output=True, text=True,
+                             timeout=10).stdout.lower()
+        res["driver_loaded"] = any(m in out for m in ("hsf", "dgcpci56"))
+    except Exception:
+        pass
+    if Path("/dev/vpmctl").exists():
+        res["vpm_available"] = True
+    for u in ("vpmcall", "vpmdrop", "vpmstat"):
+        if shutil.which(u):
+            res["vpmcall"] = True
+            break
+    import glob as _glob
+    for p in sorted(_glob.glob("/dev/ttySHSF*")):
+        res["ports"].append(os.path.basename(p))
+    if not res["driver_loaded"]:
+        res["notes"] = ("Модуль HSF не загружен. Установите пакет hsfmodem "
+                        "(Astra 1.7: репозиторий common/extra) или соберите "
+                        "драйвер Linuxant; после установки — «modprobe hsf».")
+    elif not res["vpm_available"]:
+        res["notes"] = ("/dev/vpmctl отсутствует: загрузите модули "
+                        "hsf/vpmdrv, либо включите Voice-over-IP в /etc/hsfconf.")
+    elif not res["ports"]:
+        res["notes"] = "Модем виден драйвером, но /dev/ttySHSF* нет: «hsftest», переподключите."
+    else:
+        res["notes"] = "HSF-модем готов: факс через ttySHSF*, голос через vpmcall."
+    return res
+
+
+def setup_vpmcall(enable: bool = True) -> dict:
+    """Включить/выключить маршрутизацию голоса HSF (ccmux/VoIP) через конфиг
+    /etc/hsfconf.d/99-fax-pdf.conf.  Требует root.  После изменения нужно
+    перезагрузить драйвер (rmmod/modprobe hsf) или перезагрузить ПК."""
+    conf_dir = Path("/etc/hsfconf.d")
+    conf = conf_dir / "99-fax-pdf.conf"
+    if enable:
+        body = ("\n# Fax-PDF: голосовые вызовы на HSF-модеме\n"
+                "CCMUX_ENABLED=1\n"
+                "VOICE_OVER_IP=1\n"
+                "VPM_AUDIO_MODE=1\n")
+        try:
+            conf_dir.mkdir(parents=True, exist_ok=True)
+            old = conf.read_text(encoding="utf-8") if conf.is_file() else ""
+            if "CCMUX_ENABLED=1" not in old:
+                conf.write_text(old + body, encoding="utf-8")
+            return {"ok": True,
+                    "msg": "Голос HSF включён (ccmux/VoIP). Перезагрузите "
+                           "модуль: sudo rmmod hsf && sudo modprobe hsf"}
+        except OSError as e:
+            return {"ok": False, "msg": f"нет прав на {conf}: {e}"}
+    try:
+        if conf.is_file():
+            conf.unlink()
+        return {"ok": True, "msg": "Конфиг голоса HSF удалён, голос выключен"}
+    except OSError as e:
+        return {"ok": False, "msg": str(e)}
+
+
+def dial_voice_hsf(number: str, seconds: int = 30) -> dict:
+    """Позвонить голосом с HSF-модема через vpmcall (off-hook → DTMF).
+
+    Требуется, чтобы faxgetty НЕ держал модем в этот момент (порт освобождается
+    автоматически при простое).  Возвращает {'ok', 'msg'}.
+    """
+    if not shutil.which("vpmcall"):
+        return {"ok": False,
+                "msg": "vpmcall не найден — установите пакет hsfmodem"}
+    cmd = ["vpmcall", "-t", str(seconds), "--", number]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=seconds + 20)
+        ok = r.returncode == 0
+        return {"ok": ok, "msg": ((r.stdout or "") + (r.stderr or ""))[-400:]
+                .strip() or ("вызов завершён" if ok else
+                            f"код возврата {r.returncode}")}
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "msg": str(e)}
+
+
 def _udev_prop(devpath: str, prop: str) -> str:
     """Свойство udev (/sys/.../uevent) без pyserial/pyudev — только чтение файлов."""
     try:
@@ -115,7 +221,7 @@ def list_modems() -> List[dict]:
     определяется только по syslog-подсказкам)."""
     import glob as _glob
     found = []
-    for pat in ("/dev/ttyS*", "/dev/ttyUSB*", "/dev/ttyACM*"):
+    for pat in ("/dev/ttyS*", "/dev/ttyUSB*", "/dev/ttyACM*", "/dev/ttySHSF*"):
         for dev in sorted(_glob.glob(pat)):
             try:
                 rp = os.path.realpath(dev)
@@ -124,7 +230,8 @@ def list_modems() -> List[dict]:
             if not os.path.exists(rp):
                 continue
             entry = {"dev": dev, "real": rp, "desc": "",
-                     "vendor": "", "product": "", "busy": False}
+                     "vendor": "", "product": "", "busy": False,
+                     "hsf": False}
             # имя tty-устройства (ttyS0/ttyUSB0/ttyACM0) для поиска в sysfs
             name = os.path.basename(rp)
             # 1) sysfs-драйвер модема: /sys/class/tty/<name>/device/driver
@@ -185,7 +292,11 @@ def list_modems() -> List[dict]:
                 if vid and pid and not entry.get("vendor_id"):
                     entry["vendor_id"], entry["product_id"] = vid, pid
             # 3) описание по драйверу
-            if not entry["desc"]:
+            if name.startswith("ttySHSF") or is_hsf_device(name, drv):
+                entry["hsf"] = True
+                entry["desc"] = "Conexant HSF winmodem (эмуляция Class 2.0)"
+                entry["vendor"], entry["product"] = "Conexant", "HSF"
+            elif not entry["desc"]:
                 if drv:
                     entry["desc"] = f"USB serial ({drv})"
                     entry["vendor"], entry["product"] = drv, ""

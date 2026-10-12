@@ -47,7 +47,7 @@ except ImportError:
     import hylafaxd as hx
 
 APP_TITLE = "Факс-приёмник — Fax-PDF (HylaFAX)"
-APP_VERSION = "1.3.8"
+APP_VERSION = "1.3.9"
 
 
 def _about_text():

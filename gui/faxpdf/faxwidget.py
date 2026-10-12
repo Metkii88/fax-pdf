@@ -159,9 +159,11 @@ class FaxMachineWidget(QWidget):
         self.offhook = False             # «трубка поднята»
         self._ring_count = 0
         self._seen_voice_ts = set()
-        # --- модем (автоопределение ttyS*/ttyUSB*/ttyACM*)
+        # --- модем (автоопределение ttyS*/ttyUSB*/ttyACM*/ttySHSF*)
         self.modems: List[dict] = []
         self.selected_modem: Optional[str] = cfgmod.get("modem") or None
+        # голос через драйвер HSF (vpmcall) — актуально для win-модемов Conexant
+        self.hsf_voice = bool(cfgmod.get("hsf_voice"))
         self._scan_modems(silent=True)
 
         # анимация мигания индикатора
@@ -238,6 +240,9 @@ class FaxMachineWidget(QWidget):
         r["SAVE"] = QRect(x0, by, 2 * kw + gx, 26)
         r["VOICE"] = QRect(x0 + 2 * (kw + gx) + 8, by, 2 * kw + gx, 26)
         r["MODEM"] = QRect(x0 + 4 * (kw + gx) + 16, by, 2 * kw + gx, 26)
+        # кнопка HSF — только когда выбран win-модем Conexant (ttySHSF*)
+        if self._is_hsf_selected():
+            r["HSF"] = QRect(x0 + 6 * (kw + gx) + 24, by, 2 * kw + gx, 26)
         # функциональные кнопки справа от клавиатуры
         fx = panel.right() - 96
         fy = panel.top() + 12
@@ -330,6 +335,9 @@ class FaxMachineWidget(QWidget):
         elif k == "MODEM":
             self._pick_modem()
             return
+        elif k == "HSF":
+            self._hsf_setup_dialog()
+            return
         else:
             if len(self.digits) < 24:
                 self.digits += k
@@ -339,6 +347,47 @@ class FaxMachineWidget(QWidget):
     # ---------------- actions ----------------
 
     _last_number: Optional[str] = None
+
+    # ---------------- HSF-модемы (winmodem Conexant) ----------------
+
+    def _is_hsf_selected(self) -> bool:
+        """Выбранный модем — HSF/winmodem (ttySHSF* или драйвер hsf)?"""
+        if not self.selected_modem:
+            return False
+        for m in self.modems:
+            if m["dev"] == self.selected_modem:
+                return bool(m.get("hsf"))
+        return "shsf" in self.selected_modem.lower()
+
+    def _hsf_setup_dialog(self) -> None:
+        """Мастер поддержки HSF: статус драйвера, vpmcall, голос/факс."""
+        st = hx.hsf_status()
+        lines = [
+            f"Модуль ядра hsf/dgcpci56: {'загружен ✔' if st['driver_loaded'] else 'НЕ загружен ✘'}",
+            f"/dev/vpmctl (интерфейс голоса): {'есть ✔' if st['vpm_available'] else 'нет ✘'}",
+            f"Утилита vpmcall: {'найдена ✔' if st['vpmcall'] else 'не найдена ✘'}",
+            f"Порты ttySHSF*: {', '.join(st['ports']) or '—'}",
+            "",
+            st["notes"] or "HSF-оборудование не обнаружено.",
+        ]
+        res = QMessageBox.question(
+            self, "Поддержка HSF-модема",
+            "\n".join(lines) +
+            "\n\nВключить голосовые вызовы через драйвер HSF (vpmcall)?\n"
+            "(факс при этом идёт как обычно через /dev/ttySHSF*)",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if res == QMessageBox.Yes:
+            cfgmod.set_hsf_voice(True)
+            r = hx.setup_vpmcall(True)          # требует root — ошибки не фатальны
+            cfgmod.set_hsf_voice(bool(r.get("ok")))
+            self.hsf_voice = bool(r.get("ok"))
+            QMessageBox.information(self, "Голос HSF", r.get("msg", ""))
+            self._log_lcd("HSF VOICE ON" if self.hsf_voice else "HSF NO ROOT")
+        else:
+            cfgmod.set_hsf_voice(False)
+            self.hsf_voice = False
+            self._log_lcd("HSF VOICE OFF")
+        self.update()
 
     def _choose_save_dir(self):
         """Выбор папки сохранения принятых факсов (по умолчанию /home/user)."""
@@ -382,13 +431,14 @@ class FaxMachineWidget(QWidget):
         if not self.selected_modem:
             return "🔌 МОДЕМ: нет"
         port = os.path.basename(self.selected_modem)
+        tag = " · HSF" if self._is_hsf_selected() else ""
         for m in self.modems:
             if m["dev"] == self.selected_modem:
                 v = (m.get("vendor") or "").strip()
                 p = (m.get("product") or "").strip()
                 name = " ".join(x for x in (v[:10], p[:14]) if x) or m.get("desc", "")
-                return f"🔌 {port} · {name[:24]}"
-        return f"🔌 {port}"
+                return f"🔌 {port} · {name[:22]}{tag}"
+        return f"🔌 {port}{tag}"
 
     def _pick_modem(self) -> None:
         """Диалог выбора модема из автоматически определённых устройств."""
@@ -401,8 +451,9 @@ class FaxMachineWidget(QWidget):
             vidpid = ""
             if m.get("vendor_id"):
                 vidpid = f" [{m['vendor_id']}:{m['product_id']}]"
+            hsf = "  📠 HSF" if m.get("hsf") else ""
             busy = "  ⚕ HylaFAX" if m.get("busy") else ""
-            labels.append(f"{m['dev']} — {desc}{vidpid}{busy}")
+            labels.append(f"{m['dev']} — {desc}{vidpid}{hsf}{busy}")
             items.append(m)
         if not items:
             self._scan_modems(silent=False)   # покажет «не найдено»
@@ -425,8 +476,21 @@ class FaxMachineWidget(QWidget):
         self.selected_modem = sel["dev"]
         cfgmod.set_modem(sel["dev"])
         self._log_lcd("MODEM " + os.path.basename(sel["dev"]).upper()[:10])
+        # HSF-модем: предложить включить голос через драйвер (vpmcall)
+        if sel.get("hsf"):
+            QMessageBox.information(
+                self, "HSF-модем",
+                f"{sel['dev']} — программный модем (winmodem) Conexant HSF.\n\n"
+                "Факс: HylaFAX работает с ним через эмуляцию Class 2.0\n"
+                "(faxaddmodem выполняет сам драйвер при загрузке модуля).\n"
+                "Голос: доступен через утилиты vpmcall/vpmdrop после\n"
+                "включения Voice-over-IP в /etc/hsfconf (кнопка HSF на корпусе).\n\n"
+                "Рекомендуется пакет hsfmodem из репозитория Astra или\n"
+                "драйвер Linuxant; после установки — «sudo modprobe hsf».")
+            cfgmod.set_hsf_voice(True)
+            self.hsf_voice = True
         # если модем ещё не настроен в HylaFAX — предложить автонастройку
-        if not sel.get("busy"):
+        elif not sel.get("busy"):
             res = QMessageBox.question(
                 self, "Настроить модем?",
                 f"Устройство {sel['dev']} ({sel.get('desc', '')}) ещё не настроено\n"
@@ -470,14 +534,32 @@ class FaxMachineWidget(QWidget):
             pass
 
     def _toggle_offhook(self):
-        """«Снять/положить трубку» — приём голосового вызова."""
+        """«Снять/положить трубку».
+
+        На HSF-модеме реальное снятие трубки и разговор идут через драйвер
+        (vpmcall/vpmdrop); на классическом модем — режим отображается только
+        локально (физический audio path зависит от модели модема)."""
         self.offhook = not self.offhook
         if self.offhook:
             self._set_mode(MODE_VOICE)
             self._log_lcd("OFF-HOOK ГОЛОС")
             self._beep((500, 150))
+            if self._is_hsf_selected() and self.hsf_voice and self.digits:
+                # с HSF можно сразу позвонить: vpmcall снимает трубку и набирает
+                num = self.digits.strip("+")
+                r = hx.dial_voice_hsf(num)
+                self._log_lcd(("CALL " + num) if r["ok"] else "CALL FAIL")
+                if not r["ok"]:
+                    QToolTip.showText(
+                        self.mapToGlobal(self.rect().center()),
+                        "vpmcall: " + r["msg"], self)
         else:
             self._log_lcd("ON-HOOK")
+            if self._is_hsf_selected() and self.hsf_voice:
+                try:
+                    hx.run(["vpmdrop"], timeout=5)   # положить трубку на HSF
+                except Exception:
+                    pass
             if self.mode == MODE_VOICE:
                 self._set_mode(MODE_IDLE)
         self.update()
@@ -629,6 +711,10 @@ class FaxMachineWidget(QWidget):
         self._set_mode(MODE_VOICE)
         self._log_lcd(f"ANSWERED {num}")
         self._beep((500, 150))
+        # HSF-модем: реальное поднятие трубки и голосовой тракт — через vpmcall
+        if self._is_hsf_selected() and self.hsf_voice:
+            r = hx.dial_voice_hsf(num or "", seconds=60)
+            self._log_lcd("HSF ANSWER" if r["ok"] else "HSF LINE FAIL")
         self.update()
         # «разговор» идёт, пока оператор не положит трубку кнопкой VOICE/STOP;
         # автосброс через 60 с, чтобы аппарат не залип в VOICE
@@ -940,10 +1026,12 @@ class FaxMachineWidget(QWidget):
         for k, r in rects.items():
             hovered = self._hover_key == k
             pressed = self._pressed_key == k
-            special = k in ("TxD", "RxD", "STOP", "HOLD", "SAVE", "VOICE", "MODEM")
+            special = k in ("TxD", "RxD", "STOP", "HOLD", "SAVE", "VOICE",
+                            "MODEM", "HSF")
             base = {"TxD": QColor("#1d6b34"), "RxD": QColor("#175a75"),
                     "STOP": QColor("#8c2020"), "HOLD": QColor("#5a4a17"),
                     "SAVE": QColor("#3a3f47"), "MODEM": QColor("#204a63"),
+                    "HSF": QColor("#5a2f6e"),
                     "VOICE": (QColor("#7a5a12") if self.offhook
                               else QColor("#8a6d1f"))}.get(
                         k, QColor("#3b4048") if not hovered else QColor("#4a505a"))
@@ -958,7 +1046,7 @@ class FaxMachineWidget(QWidget):
             label = {"TxD": "TX▲ ОТПР.", "RxD": "RX▼ ПРИН.", "STOP": "■ СТОП",
                      "HOLD": "⏸ HOLD", "REDIAL": "REDIAL", "<": "◀ C",
                      "SAVE": "💾 ПАПКА", "VOICE": "📞 ТРУБКА",
-                     "MODEM": "🔌 МОДЕМ"}.get(k, k)
+                     "MODEM": "🔌 МОДЕМ", "HSF": "HSF"}.get(k, k)
             p.drawText(rr, Qt.AlignCenter, label)
 
         # ---------- плашка текущего модема (клик = выбор/скан) ----------

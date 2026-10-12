@@ -27,6 +27,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -60,9 +61,44 @@ def push_event(rec: dict) -> None:
     log(f"СОБЫТИЕ: {rec}")
 
 
+def is_hsf_tty(dev: str) -> bool:
+    """ttySHSF* — порт win-модема Conexant HSF: AT-команды туда не проходят,
+    линия поднимается утилитами драйвера vpmcall/vpmdrop (alsa-utils-hsf)."""
+    return "shsf" in (dev or "").lower()
+
+
+def answer_call_hsf(hangup_after: int = 0) -> bool:
+    """Поднять линию на HSF-модеме через vpmcall (off-hook без номера).
+
+    hangup_after>0 — через N секунд повесить трубку (vpmdrop).
+    Возвращает True при успехе; если vpmcall недоступна — False.
+    """
+    import shutil as _sh
+    import subprocess as _sp
+    if not _sh.which("vpmcall"):
+        log("HSF: vpmcall не найден — установите пакет hsfmodem (Astra) или Linuxant")
+        return False
+    try:
+        args = ["vpmcall", "-t", str(max(hangup_after, 1) or 30)] if hangup_after else ["vpmcall"]
+        _sp.run(args, timeout=15, capture_output=True)
+        if hangup_after and _sh.which("vpmdrop"):
+            threading.Timer(hangup_after, lambda: _sp.run(["vpmdrop"], timeout=10,
+                                                           capture_output=True)).start()
+        return True
+    except Exception as e:
+        log(f"HSF: vpmcall ошибка: {e}")
+        return False
+
+
 def answer_call(tty: str) -> bool:
-    """best-effort: поднять трубку (off-hook) и включить динамик модема."""
+    """best-effort: поднять трубку (off-hook) и включить динамик модема.
+
+    Для HSF/win-модемов (ttySHSF*) используется vpmcall драйвера hsfmodem —
+    AT-команды таким устройствам недоступны напрямую.
+    """
     dev = tty or MODEM_TTY
+    if is_hsf_tty(dev):
+        return answer_call_hsf()
     if not dev or not Path(dev).exists():
         return False
     try:

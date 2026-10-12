@@ -182,6 +182,44 @@ EOF
 fi
 
 # ----------------------------------------------------------------------------
+# 5b. Win-модемы Conexant HSF (hsfmodem) — определение и установка драйвера
+#     У таких модемов нет полноценного AT-порта: HylaFAX работает через
+#     /dev/ttySHSF*, а голосовая линия поднимается утилитами vpmcall/vpmdrop.
+# ----------------------------------------------------------------------------
+log "Проверка win-модемов Conexant HSF..."
+HSF_FOUND=0
+if lspci -nm 2>/dev/null | grep -qiE '0780|0703' && \
+   lspci 2>/dev/null | grep -qiE 'conexant|hsf|agere|motorola.*modem|smartlink'; then
+    HSF_FOUND=1
+fi
+lsusb 2>/dev/null | grep -qiE '0x0e8f|conexant.*(hsf|modem)' && HSF_FOUND=1
+[[ -e /proc/hsf ]] && HSF_FOUND=1          # драйвер уже загружен
+
+if (( HSF_FOUND )); then
+    log "Обнаружен вероятный win-модем HSF."
+    if ! modinfo hsf >/dev/null 2>&1; then
+        log "Установка пакета hsfmodem из репозитория Astra..."
+        apt-get install -y hsfmodem 2>/dev/null || \
+            err "Пакет hsfmodem недоступен — скачайте драйвер Linuxant (hsfmodem-*.tar.gz), соберите и установите вручную."
+    fi
+    if modinfo hsf >/dev/null 2>&1; then
+        modprobe hsf 2>/dev/null || true
+        echo hsf >> /etc/modules-load.d/fax-pdf-hsf.conf
+        # голос через VPM (vpmcall/vpmdrop) — включаем, если есть конфиг-каталог
+        mkdir -p /etc/hsfconf.d
+        cat > /etc/hsfconf.d/99-fax-pdf.conf <<'HCF'
+# fax-pdf: Voice-over-IP / VPM для голосовых вызовов с GUI-аппарата
+options hsf_voip_callinit="echo off"
+alias snd-pcm-oss-off
+HCF
+        log "Модуль hsf загружен; конфиг голоса: /etc/hsfconf.d/99-fax-pdf.conf"
+        log "Модем HSF подключится как /dev/ttySHSF* — далее: sudo faxaddmodem ttySHSF0"
+    fi
+else
+    log "Win-модемов HSF не обнаружено (используется классический AT-модем)."
+fi
+
+# ----------------------------------------------------------------------------
 # 6. Systemd-юниты
 # ----------------------------------------------------------------------------
 log "Установка systemd-юнитов..."

@@ -1,3 +1,16 @@
+fax-pdf (1.3.9-1) astra; urgency=low
+
+  * Поддержка win-модемов Conexant HSF (hsfmodem/Linuxant):
+    - install-astra.sh: автоопределение HSF (lspci/lsusb), установка пакета
+      hsfmodem, modprobe hsf, modules-load.d, конфиг голоса /etc/hsfconf.d;
+    - GUI: метка «HSF» у устройства, кнопка HSF на корпусе (мастер драйвера,
+      vpmctl/vpmcall), голос через vpmcall/vpmdrop вместо AT-команд;
+    - voice-monitor.py: подъём линии на ttySHSF* через vpmcall;
+    - сканер модемов GUI включает /dev/ttySHSF*;
+    - README: раздел «Поддержка HSF-модемов».
+
+ -- Fax-PDF Project <fax-pdf@localhost>  Mon, 12 Oct 2026 14:00:00 +0300
+
 fax-pdf (1.3.8-1) astra; urgency=medium
 
   * v1.3.8: в справке «О программе» исправлена терминология PARSEC:

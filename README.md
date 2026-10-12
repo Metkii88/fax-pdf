@@ -72,12 +72,33 @@ sudo systemctl enable --now hylafax fax-xferfaxd fax-pdf-monitor
    PDF-квитанцию и шлёт уведомление (в т.ч. всплывающее, даже если GUI свёрнут в трей).
 
 ## Требования к оборудованию
-* Аналоговый модем Class 1 / Class 2.0 (Conexant, Lucent, USRobotics). **Не winmodem!**
-* Порт RS-232 (`ttyS0`…`ttyS3`) или USB-модем (`ttyUSB0`, `ttyACM0`).
-* GUI автоматически сканирует `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*` (sysfs/udev)
-  и предлагает найденные устройства в списке с драйвером и моделью; кнопка «Обновить» —
-  пересканировать.
+* Аналоговый модем Class 1 / Class 2.0 (Conexant, Lucent, USRobotics) — предпочтительно.
+* **Поддерживаются также win-модемы Conexant HSF** (`/dev/ttySHSF*`) — см. раздел
+  «Поддержка HSF-модемов» ниже: факс через HylaFAX, голос через утилиты драйвера vpmcall/vpmdrop.
+* Порт RS-232 (`ttyS0`…`ttyS3`), USB-модем (`ttyUSB0`, `ttyACM0`) или PCI/AC97 HSF (`ttySHSF0`).
+* GUI автоматически сканирует `/dev/ttyS*`, `/dev/ttyUSB*`, `/dev/ttyACM*`, `/dev/ttySHSF*`
+  (sysfs/udev), помечает HSF-устройства и предлагает найденные в списке с драйвером и моделью;
+  кнопка «Обновить» — пересканировать.
 * Проверка: `dmesg | grep tty`, затем `chat -v "" ATZ OK "" AT+FCQ OK`
+  (для HSF вместо chat — `hsftest` и `vpmstat`).
+
+## Поддержка HSF-модемов (winmodem Conexant / Linuxant hsfmodem)
+HSF-модемы не имеют полноценного AT-интерфейса: протокольную часть выполняет драйвер ядра.
+Проект поддерживает их следующим образом:
+* **Автоопределение**: `install-astra.sh` сканирует lspci/lsusb, при нахождении HSF ставит
+  пакет `hsfmodem` (или подсказывает tar.gz Linuxant), выполняет `modprobe hsf`, прописывает
+  модуль в `/etc/modules-load.d/fax-pdf-hsf.conf` и создаёт `/etc/hsfconf.d/99-fax-pdf.conf`
+  (Voice-over-IP/VPM для голоса).
+* **Факс**: HylaFAX работает с `ttySHSF*` через встроенный Class 1/2 эмулятор драйвера —
+  после установки выполните `sudo faxaddmodem ttySHSF0`.
+* **Голос**: GUI-аппарат определяет HSF по порту/драйверу (метка «· HSF» на плашке модема,
+  кнопка **HSF** на корпусе открывает мастер: статус модуля, `/dev/vpmctl`, наличие vpmcall).
+  Набор номера и подъём линии выполняются утилитами `vpmcall` (off-hook + DTMF) и `vpmdrop`
+  (сброс); `voice-monitor.py` при автоответе на HSF-порту также использует `vpmcall` вместо
+  AT-команд. Звук — через ALSA-конвейер драйвера (voip/ccmux).
+* Ограничения: качество зависит от версии драйвера (Astra 1.7: `hsfmodem` из репозитория или
+  Linuxant 3.10+); для голоса могут потребоваться root-права на `/dev/vpmctl` (правило udev
+  `GROUP="dialout"`), это предлагается в мастере HSF.
 
 ## Структура каталогов после установки
 ```

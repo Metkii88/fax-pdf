@@ -29,6 +29,7 @@ DEFAULTS = {
     "voice_rings": 4,
     "out_sfx": True,
     "modem": "",                               # выбранный модем (/dev/ttyUSB0 и т.п.)
+    "hsf_voice": False,                        # голос через vpmcall на HSF-модеме
 }
 
 
@@ -88,3 +89,11 @@ def set_modem(dev: str) -> str:
     cfg["modem"] = dev or ""
     save(cfg)
     return cfg["modem"]
+
+
+def set_hsf_voice(enable: bool) -> bool:
+    """Запомнить, что голос на линии обслуживает HSF-драйвер (vpmcall)."""
+    cfg = load()
+    cfg["hsf_voice"] = bool(enable)
+    save(cfg)
+    return cfg["hsf_voice"]
